@@ -63,6 +63,11 @@ data class UiState(
     val lib: Lib = Lib.PLAYLISTS,
     val playlists: List<dev.loom.core.NamedPlaylist> = emptyList(),
     val lyrics: String? = null,
+    val syncedLyrics: List<dev.loom.core.LyricLine> = emptyList(),
+    /** Equalizer preset name; applied by the player service. */
+    val eq: String = "Flat",
+    /** Lyrics take over the whole screen instead of swapping into the cover box. */
+    val lyricsFull: Boolean = false,
     val openPlayer: Boolean = false,
     val shuffle: Boolean = false,
     val repeat: Boolean = false,
@@ -98,6 +103,8 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
     var onPrev: (() -> Unit)? = null
     /** Wired by Playback; fires when the player reaches the end of the current item. */
     var onEnded: (() -> Unit)? = null
+    /** Wired by Playback; applies an equalizer preset to the live audio session. */
+    var onEq: ((String) -> Unit)? = null
 
     init {
         _state.value = _state.value.copy(
@@ -105,6 +112,10 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
             liked = store.liked,
             saved = store.saved,
             queries = store.queries,
+            playlists = store.playlists,
+            // Restored but paused: the card is there, the audio is not.
+            queue = store.queue,
+            index = store.queueIndex.coerceIn(-1, store.queue.lastIndex),
         )
         loadHome()
         loadForYou()
@@ -112,8 +123,14 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setTab(t: Tab) {
-        // Detail pages live per tab, so switching never clears or leaks them.
-        _state.value = _state.value.copy(tab = t)
+        val s = _state.value
+        // Tapping the tab you are already on goes back to its root, the way every
+        // bottom-nav app behaves. Switching tabs keeps each tab's detail page intact.
+        _state.value = if (s.tab == t && s.openPlaylist.containsKey(t)) {
+            s.copy(openPlaylist = s.openPlaylist - t)
+        } else {
+            s.copy(tab = t)
+        }
         when (t) {
             Tab.HOME -> if (_state.value.shelves.isEmpty()) loadHome()
             Tab.FOR_YOU -> if (_state.value.forYou.isEmpty()) loadForYou()
@@ -242,8 +259,16 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun play(track: Track, queue: List<Track> = _state.value.results) {
-        val idx = queue.indexOf(track).coerceAtLeast(0)
-        _state.value = _state.value.copy(queue = queue, index = idx, resolving = true, error = null)
+        // Playing a single track always appends to the live queue instead of replacing it,
+        // so tapping one song from search never throws away what is already lined up.
+        val target = if (queue.size <= 1 && _state.value.queue.isNotEmpty()) {
+            val existing = _state.value.queue
+            if (existing.any { it.id == track.id && it.source == track.source }) existing
+            else existing + track
+        } else queue
+        val idx = target.indexOf(track).coerceAtLeast(0)
+        _state.value = _state.value.copy(queue = target, index = idx, resolving = true, error = null)
+        store.saveQueue(target, idx)
         viewModelScope.launch {
             val stream = withContext(Dispatchers.IO) { runCatching { Music.bestStream(track) } }
             stream.fold(
@@ -276,16 +301,24 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun openPlayer() { _state.value = _state.value.copy(openPlayer = true) }
-    fun closePlayer() { _state.value = _state.value.copy(openPlayer = false) }
+    fun closePlayer() { _state.value = _state.value.copy(openPlayer = false, lyricsFull = false) }
+    fun openLyrics() { _state.value = _state.value.copy(lyricsFull = true) }
+    fun closeLyrics() { _state.value = _state.value.copy(lyricsFull = false) }
 
     /** Lyrics are fetched on demand and cached per track id, so the toggle is instant after. */
     fun loadLyrics() {
         val t = _state.value.current ?: return
         if (_state.value.lyrics != null) return
         viewModelScope.launch {
-            val res = withContext(Dispatchers.IO) { runCatching { Music.lyrics(t) } }
-            _state.value = _state.value.copy(lyrics = res.getOrNull())
+            val (text, synced) = withContext(Dispatchers.IO) { runCatching { Music.lyrics(t) } }
+                .getOrDefault(null to emptyList())
+            _state.value = _state.value.copy(lyrics = text, syncedLyrics = synced)
         }
+    }
+
+    fun setEq(name: String) {
+        _state.value = _state.value.copy(eq = name)
+        onEq?.invoke(name)
     }
 
     fun createPlaylist(name: String): Boolean {
@@ -321,6 +354,7 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
         if (s.queue.isEmpty()) return
         val next = (s.index + delta + s.queue.size) % s.queue.size
         _state.value = s.copy(index = next)
+        store.saveQueue(s.queue, next)
         play(s.queue[next], s.queue)
     }
 
@@ -369,6 +403,7 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
             }
             val grown = _state.value.queue + fresh
             _state.value = _state.value.copy(queue = grown, resolving = false)
+            store.saveQueue(grown, _state.value.index + 1)
             play(grown[_state.value.index + 1], grown)
         }
     }

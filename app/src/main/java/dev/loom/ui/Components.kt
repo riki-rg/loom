@@ -35,6 +35,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -48,31 +49,49 @@ import dev.chrisbanes.haze.hazeEffect
 import dev.loom.core.Collection
 import dev.loom.core.Track
 
-/** Shared glass surface: real backdrop blur plus a hairline highlight along the top edge. */
+/**
+ * Shared glass surface: real backdrop blur plus a hairline highlight along the top edge.
+ * Tint follows the scheme so the same chrome reads as frosted white in light mode and
+ * smoked glass in dark, instead of one hardcoded dark panel.
+ */
+@Composable
 fun Modifier.glass(
     haze: HazeState,
-    color: Color = Color.White.copy(alpha = 0.07f),
+    color: Color = Color.Unspecified,
     corner: Int = 24,
     blur: Int = 24,
-): Modifier = this
-    .clip(RoundedCornerShape(corner.dp))
-    .hazeEffect(
-        state = haze,
-        style = HazeStyle(
-            backgroundColor = Color(0xFF0B0D14),
-            tints = listOf(HazeTint(Color.White.copy(alpha = 0.06f))),
-            blurRadius = blur.dp,
-            noiseFactor = 0.06f,
-        ),
-    )
-    .background(color)
-    .border(
-        width = 1.dp,
-        brush = Brush.verticalGradient(
-            listOf(Color.White.copy(alpha = 0.22f), Color.White.copy(alpha = 0.04f)),
-        ),
-        shape = RoundedCornerShape(corner.dp),
-    )
+): Modifier {
+    val dark = MaterialTheme.colorScheme.surface.luminance() < 0.35f
+    val base = MaterialTheme.colorScheme.surface
+    val fill = if (color == Color.Unspecified) {
+        if (dark) Color.White.copy(alpha = 0.07f) else Color.White.copy(alpha = 0.55f)
+    } else color
+    return this
+        .clip(RoundedCornerShape(corner.dp))
+        .hazeEffect(
+            state = haze,
+            style = HazeStyle(
+                backgroundColor = base,
+                tints = listOf(
+                    HazeTint(if (dark) Color.White.copy(alpha = 0.06f) else Color.White.copy(alpha = 0.35f)),
+                ),
+                blurRadius = blur.dp,
+                noiseFactor = if (dark) 0.06f else 0.02f,
+            ),
+        )
+        .background(fill)
+        .border(
+            width = 1.dp,
+            brush = Brush.verticalGradient(
+                if (dark) {
+                    listOf(Color.White.copy(alpha = 0.22f), Color.White.copy(alpha = 0.04f))
+                } else {
+                    listOf(Color.White.copy(alpha = 0.9f), Color.Black.copy(alpha = 0.06f))
+                },
+            ),
+            shape = RoundedCornerShape(corner.dp),
+        )
+}
 
 @Composable
 fun SectionTitle(text: String, count: Int = 0, modifier: Modifier = Modifier) {

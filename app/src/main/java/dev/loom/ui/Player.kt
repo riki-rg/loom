@@ -30,9 +30,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Equalizer
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PlaylistAdd
@@ -86,19 +88,24 @@ fun NowPlayingSheet(
     liked: Boolean,
     shuffle: Boolean,
     repeat: Boolean,
+    eq: String,
     onShuffle: () -> Unit,
     onRepeat: () -> Unit,
+    onEq: (String) -> Unit,
+    onLyrics: () -> Unit,
     onClose: () -> Unit,
     onToggle: () -> Unit,
     onSkip: (Int) -> Unit,
     onSeek: (Long) -> Unit,
     onLike: () -> Unit,
+    onLikeTrack: (Track) -> Unit,
+    onPlayTrack: (Track) -> Unit,
     onAddToPlaylist: (String) -> Unit,
     onCreatePlaylist: (String) -> Unit,
 ) {
     val t = state.current ?: return
-    var showLyrics by remember(t.id) { mutableStateOf(false) }
     var picker by remember { mutableStateOf(false) }
+    var eqPicker by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
@@ -128,64 +135,32 @@ fun NowPlayingSheet(
                 }
                 Spacer(Modifier.weight(1f))
                 Text(
-                    if (showLyrics) "Lyrics" else "Now playing",
+                    "Now playing",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.weight(1f))
-                Spacer(Modifier.width(48.dp))
+                IconButton(onClick = onLyrics) {
+                    Icon(Icons.Rounded.Lyrics, contentDescription = "Lyrics", modifier = Modifier.size(22.dp))
+                }
             }
 
             Spacer(Modifier.height(8.dp))
 
-            // Cover <-> lyrics. Same box, so the swap does not shift the transport below.
+            // Cover opens the full lyrics page: words deserve the whole screen, not a box.
             Box(
                 Modifier
                     .fillMaxWidth()
                     .aspectRatio(1f)
                     .clip(RoundedCornerShape(28.dp))
-                    .clickable { showLyrics = !showLyrics },
+                    .clickable(onClick = onLyrics),
             ) {
-                AnimatedContent(
-                    targetState = showLyrics,
-                    transitionSpec = {
-                        (fadeIn(tween(260)) + slideInVertically(tween(260)) { it / 8 })
-                            .togetherWith(fadeOut(tween(160)) + slideOutVertically(tween(160)) { it / 8 })
-                    },
-                    label = "coverLyrics",
-                ) { lyricsMode ->
-                    if (lyricsMode) {
-                        Box(
-                            Modifier
-                                .fillMaxSize()
-                                .background(Color.Black.copy(alpha = 0.45f))
-                                .padding(20.dp),
-                        ) {
-                            if (lyrics == null) {
-                                Text(
-                                    "No lyrics for this track",
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.align(Alignment.Center),
-                                )
-                            } else {
-                                Text(
-                                    lyrics,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    textAlign = TextAlign.Center,
-                                    modifier = Modifier.verticalScroll(rememberScrollState()),
-                                )
-                            }
-                        }
-                    } else {
-                        AsyncImage(
-                            model = t.art,
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    }
-                }
+                AsyncImage(
+                    model = t.art,
+                    contentDescription = "Lyrics",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
 
             Spacer(Modifier.height(22.dp))
@@ -278,9 +253,59 @@ fun NowPlayingSheet(
                 IconButton(onClick = { picker = true }) {
                     Icon(Icons.Rounded.PlaylistAdd, contentDescription = "Add to playlist", modifier = Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+                IconButton(onClick = { eqPicker = true }) {
+                    Icon(
+                        Icons.Rounded.Equalizer,
+                        contentDescription = "Equalizer, $eq",
+                        modifier = Modifier.size(22.dp),
+                        tint = if (eq == "Flat") MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(26.dp))
+            // Up next: what the queue will play after this, so the sheet is not a dead end.
+            if (state.queue.size > 1) {
+                val upcoming = (1 until state.queue.size)
+                    .map { state.queue[(state.index + it) % state.queue.size] }
+                    .take(6)
+                SectionTitle("Up next", state.queue.size - 1)
+                upcoming.forEach { t ->
+                    TrackRow(
+                        t = t,
+                        selected = false,
+                        onLike = { onLikeTrack(t) },
+                        onClick = { onPlayTrack(t) },
+                    )
+                }
             }
             Spacer(Modifier.height(28.dp))
         }
+    }
+
+    if (eqPicker) {
+        AlertDialog(
+            onDismissRequest = { eqPicker = false },
+            title = { Text("Equalizer") },
+            text = {
+                Column {
+                    dev.loom.player.Eq.names.forEach { name ->
+                        Text(
+                            name,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (name == eq) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onEq(name); eqPicker = false }
+                                .padding(vertical = 12.dp),
+                        )
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { eqPicker = false }) { Text("Done") } },
+        )
     }
 
     if (picker) {

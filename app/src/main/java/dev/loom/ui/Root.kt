@@ -1,5 +1,6 @@
 package dev.loom.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -79,8 +80,8 @@ fun Root(vm: LoomViewModel) {
 
     // Media3 has no position callback, so the sheet polls while it is open.
     var position by remember { mutableStateOf(0L to 0L) }
-    LaunchedEffect(state.openPlayer, state.current?.id, state.playing) {
-        while (state.openPlayer) {
+    LaunchedEffect(state.openPlayer, state.lyricsFull, state.current?.id, state.playing) {
+        while (state.openPlayer || state.lyricsFull) {
             position = Playback.position()
             kotlinx.coroutines.delay(500)
         }
@@ -89,6 +90,14 @@ fun Root(vm: LoomViewModel) {
     // Opening the sheet is also when lyrics are worth fetching.
     LaunchedEffect(state.openPlayer, state.current?.id) {
         if (state.openPlayer) vm.loadLyrics()
+    }
+
+    // Hardware back must unwind the same stack the UI shows, in this order: lyrics page,
+    // player sheet, detail page, and only then leave the app.
+    BackHandler(enabled = state.lyricsFull) { vm.closeLyrics() }
+    BackHandler(enabled = !state.lyricsFull && state.openPlayer) { vm.closePlayer() }
+    BackHandler(enabled = !state.lyricsFull && !state.openPlayer && state.openHere != null) {
+        vm.closePlaylist()
     }
 
     // One SaveableStateHolder keeps each tab's scroll offset, search text and expanded rows
@@ -147,13 +156,19 @@ fun Root(vm: LoomViewModel) {
                     )
                 }
             }
-            NowPlayingPill(state, haze, vm::togglePlay, vm::skip) { vm.openPlayer() }
+            NowPlayingPill(
+                state = state,
+                haze = haze,
+                progress = if (position.second > 0) position.first.toFloat() / position.second else 0f,
+                onToggle = vm::togglePlay,
+                onSkip = vm::skip,
+            ) { vm.openPlayer() }
             FloatingNav(state.tab, haze) { vm.setTab(it) }
         }
 
         // Full player slides over everything, including the nav.
         AnimatedVisibility(
-            visible = state.openPlayer,
+            visible = state.openPlayer && !state.lyricsFull,
             enter = slideInVertically(tween(320)) { it } + fadeIn(tween(200)),
             exit = slideOutVertically(tween(280)) { it } + fadeOut(tween(180)),
         ) {
@@ -166,19 +181,45 @@ fun Root(vm: LoomViewModel) {
                 liked = state.current?.let { vm.isLiked(it) } ?: false,
                 shuffle = state.shuffle,
                 repeat = state.repeat,
+                eq = state.eq,
                 onShuffle = vm::toggleShuffle,
                 onRepeat = vm::toggleRepeat,
+                onEq = vm::setEq,
+                onLyrics = vm::openLyrics,
                 onClose = vm::closePlayer,
                 onToggle = vm::togglePlay,
                 onSkip = vm::skip,
                 onSeek = { Playback.seek(it) },
                 onLike = { state.current?.let { vm.toggleLike(it) } },
+                onLikeTrack = { vm.toggleLike(it) },
+                onPlayTrack = { vm.play(it, state.queue) },
                 onAddToPlaylist = { name -> state.current?.let { vm.addToPlaylist(name, it) } },
                 onCreatePlaylist = { name ->
                     vm.createPlaylist(name)
                     state.current?.let { vm.addToPlaylist(name, it) }
                 },
             )
+        }
+
+        // Lyrics get their own page, above the player, with the same back behaviour.
+        AnimatedVisibility(
+            visible = state.lyricsFull,
+            enter = slideInVertically(tween(300)) { it / 3 } + fadeIn(tween(220)),
+            exit = slideOutVertically(tween(260)) { it / 3 } + fadeOut(tween(160)),
+        ) {
+            state.current?.let { t ->
+                LyricsScreen(
+                    track = t,
+                    lines = state.syncedLyrics,
+                    plain = state.lyrics,
+                    positionMs = position.first,
+                    durationMs = position.second,
+                    playing = state.playing,
+                    onClose = vm::closeLyrics,
+                    onToggle = vm::togglePlay,
+                    onSkip = vm::skip,
+                )
+            }
         }
     }
 }

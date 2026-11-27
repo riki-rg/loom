@@ -47,27 +47,29 @@ private fun Tab.icon(): ImageVector = when (this) {
     Tab.SETTINGS -> Icons.Rounded.Settings
 }
 
-private val BarHeight = 64.dp
+private val BarHeight = 62.dp
 private val KnobSize = 46.dp
-private val KnobLift = 15.dp
+/** Clear air between the knob and the board. This is what makes it read as detached. */
+private val KnobGap = 7.dp
 
 /**
- * Floating pill with a lifted knob. The active tab's icon rises out of the bar into a filled
- * circle; the rest stay flat grey. Nothing about the layout animates — the bar keeps a fixed
- * height and each tab owns an equal slot, so the knob can move without reflowing anything.
+ * Floating pill where the active tab detaches from the board: the knob sits entirely above the
+ * bar with a gap and a drop shadow, so it reads as lifted off rather than bulging out of it.
+ * Nothing about the layout animates — fixed bar height, equal slots — so the knob can travel
+ * without reflowing the row.
  */
 @Composable
 fun FloatingNav(current: Tab, haze: HazeState, onPick: (Tab) -> Unit) {
     val tabs = Tab.entries
-    // Reserve room above the bar for the knob, which is drawn outside the bar's own bounds.
-    Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = KnobLift)) {
+    // Reserve the knob's own space above the bar so nothing is clipped.
+    Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = KnobSize + KnobGap)) {
         BoxWithConstraints(Modifier.fillMaxWidth().height(BarHeight)) {
             val slot = maxWidth / tabs.size
             val index = tabs.indexOf(current).coerceAtLeast(0)
 
             val slide by animateFloatAsState(
                 targetValue = index * slot.value,
-                animationSpec = spring(dampingRatio = 0.78f, stiffness = 420f),
+                animationSpec = spring(dampingRatio = 0.8f, stiffness = 380f),
                 label = "knobSlide",
             )
 
@@ -75,10 +77,9 @@ fun FloatingNav(current: Tab, haze: HazeState, onPick: (Tab) -> Unit) {
                 Modifier
                     .fillMaxWidth()
                     .height(BarHeight)
-                    .glass(haze, color = Color(0xFF12141C).copy(alpha = 0.34f), corner = 32, blur = 28),
+                    .glass(haze, corner = 31, blur = 30),
             )
 
-            // Inactive icons: flat grey in their own slot. The active one is drawn by the knob.
             Row(Modifier.fillMaxWidth().fillMaxHeight()) {
                 tabs.forEach { tab ->
                     val active = tab == current
@@ -96,7 +97,7 @@ fun FloatingNav(current: Tab, haze: HazeState, onPick: (Tab) -> Unit) {
                             Icon(
                                 tab.icon(),
                                 contentDescription = tab.label,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
                                 modifier = Modifier.size(22.dp),
                             )
                         }
@@ -104,7 +105,7 @@ fun FloatingNav(current: Tab, haze: HazeState, onPick: (Tab) -> Unit) {
                 }
             }
 
-            // Knob last so it overlaps the bar edge, lifted by half its own height.
+            // The detached knob. Drawn last, fully outside the bar's bounds.
             Box(
                 Modifier.offset(x = slide.dp).width(slot).height(BarHeight),
                 contentAlignment = Alignment.TopCenter,
@@ -112,11 +113,11 @@ fun FloatingNav(current: Tab, haze: HazeState, onPick: (Tab) -> Unit) {
                 val primary = MaterialTheme.colorScheme.primary
                 Box(
                     Modifier
-                        .offset(y = -KnobLift)
+                        .offset(y = -(KnobSize + KnobGap))
                         .size(KnobSize)
-                        .shadow(18.dp, CircleShape, ambientColor = primary, spotColor = primary)
+                        .shadow(16.dp, CircleShape, ambientColor = primary, spotColor = primary)
                         .background(primary, CircleShape)
-                        .border(2.dp, Color.White.copy(alpha = 0.45f), CircleShape),
+                        .border(1.dp, Color.White.copy(alpha = 0.55f), CircleShape),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(

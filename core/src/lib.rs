@@ -419,7 +419,87 @@ fn yt_lyrics(video_id: &str) -> Result<Value, String> {
     if text.trim().is_empty() {
         return Err("no lyrics for this track".into());
     }
+    // YouTube Music hands out untimed text only. lrclib has real LRC timings keyed on the
+    // same title/artist, so try it first for anything the user will actually see scrolling.
+    let (title, artist) = yt_track_meta(video_id).unwrap_or_default();
+    if let Ok(synced) = lrclib(&title, &artist) {
+        if !synced.is_empty() {
+            return Ok(json!({"text": text, "synced": synced}));
+        }
+    }
     Ok(json!({"text": text, "synced": []}))
+}
+
+/// Title and artist for a video id, from the same `next` payload lyrics already needs.
+fn yt_track_meta(video_id: &str) -> Option<(String, String)> {
+    let res: Value = http()
+        .post("https://music.youtube.com/youtubei/v1/player?prettyPrint=false")
+        .header("Content-Type", "application/json")
+        .header("User-Agent", UA_WEB)
+        .header("Origin", "https://music.youtube.com")
+        .body(
+            json!({
+                "context": {"client": {"clientName": "WEB_REMIX", "clientVersion": "1.20250101.00.00", "hl": "en", "gl": "US"}},
+                "videoId": video_id
+            })
+            .to_string(),
+        )
+        .send()
+        .ok()?
+        .json()
+        .ok()?;
+    let d = res.pointer("/videoDetails")?;
+    Some((
+        d.get("title")?.as_str()?.to_string(),
+        d.get("author")?.as_str()?.to_string(),
+    ))
+}
+
+/// Synced lyrics from lrclib.net, which returns LRC lines. Free, no key, no rate limit worth
+/// worrying about; it keys on title + artist so a remix suffix just misses and falls back.
+fn lrclib(title: &str, artist: &str) -> Result<Vec<Value>, String> {
+    if title.trim().is_empty() || artist.trim().is_empty() {
+        return Err("no metadata".into());
+    }
+    let url = format!(
+        "https://lrclib.net/api/get?track_name={}&artist_name={}",
+        urlencode(title),
+        urlencode(artist),
+    );
+    let res: Value = http()
+        .get(&url)
+        .header("User-Agent", "Loom/0.8 (https://github.com/riki-rg/loom)")
+        .send()
+        .map_err(|e| e.to_string())?
+        .json()
+        .map_err(|e| e.to_string())?;
+    let lrc = res.get("syncedLyrics").and_then(|s| s.as_str()).unwrap_or("");
+    Ok(parse_lrc(lrc))
+}
+
+
+/// `[mm:ss.xx] line` pairs into `[{start, text}]`, seconds as f64. Blank lines are dropped:
+/// they are stanza breaks and would make the scroller jump over nothing.
+fn parse_lrc(lrc: &str) -> Vec<Value> {
+    let mut out = Vec::new();
+    for line in lrc.lines() {
+        let line = line.trim();
+        if !line.starts_with('[') {
+            continue;
+        }
+        let Some(close) = line.find(']') else { continue };
+        let stamp = &line[1..close];
+        let text = line[close + 1..].trim();
+        if text.is_empty() {
+            continue;
+        }
+        let Some((m, rest)) = stamp.split_once(':') else { continue };
+        let (Ok(m), Ok(s)) = (m.trim().parse::<f64>(), rest.trim().parse::<f64>()) else {
+            continue;
+        };
+        out.push(json!({"start": m * 60.0 + s, "text": text}));
+    }
+    out
 }
 
 fn collect_browse_ids(v: &Value, out: &mut Vec<String>) {
@@ -863,6 +943,17 @@ mod tests {
     }
 
     // Live checks against the real endpoints; run with `cargo test --lib -- --include-ignored`.
+    #[test]
+    fn lrc_parses_timestamps_and_drops_blank_lines() {
+        let lrc = "[00:07.80] Satu bulan\n\n[01:02.50] Dua\nnot a lyric\n[bad] nope";
+        let got = parse_lrc(lrc);
+        assert_eq!(got.len(), 2, "blank, unparseable and junk lines must be dropped: {got:?}");
+        assert!((got[0]["start"].as_f64().unwrap() - 7.8).abs() < 0.01);
+        assert_eq!(got[0]["text"], "Satu bulan");
+        assert!((got[1]["start"].as_f64().unwrap() - 62.5).abs() < 0.01);
+        assert_eq!(urlencode("Satu Bulan & Co"), "Satu%20Bulan%20%26%20Co");
+    }
+
     #[test]
     #[ignore]
     fn live_yt_lyrics() {

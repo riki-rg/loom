@@ -51,6 +51,7 @@ object Playback {
             vm.onPlay = ::play
             vm.onPause = { controller?.pause() }
             vm.onResume = { controller?.play() }
+            vm.onEq = { name -> Eq.apply(name) }
         }, ContextCompat.getMainExecutor(app))
     }
 
@@ -72,5 +73,6 @@ object Playback {
     fun release() {
         controller?.release()
         controller = null
+        Eq.release()
     }
 }

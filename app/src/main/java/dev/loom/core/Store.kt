@@ -133,6 +133,24 @@ class Store(ctx: Context) {
     fun weekly(week: String): List<Track> = readTracks("weekly:$week")
 
     fun setWeekly(week: String, items: List<Track>) = write("weekly:$week", items.map { it.toJson() })
+
+    /**
+     * The queue survives a real app kill, so reopening the app shows the last track in the
+     * now-playing card instead of an empty bar. Only the queue and the index — playback itself
+     * is not resumed, because starting audio on launch would be a surprise.
+     */
+    var queue: List<Track>
+        get() = readTracks("queue")
+        private set(v) = write("queue", v.take(80).map { it.toJson() })
+
+    var queueIndex: Int
+        get() = p.getInt("queueIndex", -1)
+        private set(v) = p.edit().putInt("queueIndex", v).apply()
+
+    fun saveQueue(items: List<Track>, index: Int) {
+        queue = items
+        queueIndex = index
+    }
 }
 
 /** A user-named playlist. */

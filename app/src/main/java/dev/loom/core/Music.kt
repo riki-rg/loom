@@ -52,6 +52,9 @@ enum class Source(val label: String) {
 
 data class Stream(val url: String, val userAgent: String, val preview: Boolean = false)
 
+/** One timed lyric line. `start` is seconds from the beginning of the track. */
+data class LyricLine(val start: Double, val text: String)
+
 class CoreException(message: String) : Exception(message)
 
 private fun unwrap(raw: String): Any {
@@ -145,11 +148,18 @@ object Music {
     fun playlist(id: String, params: String): List<Track> =
         parseTracks(Core.ytPlaylist(id, params), Source.YT_MUSIC)
 
-    /** Plain-text lyrics; null when the track has none. */
-    fun lyrics(track: Track): String? {
-        if (track.source != Source.YT_MUSIC) return null
+    /** Lyrics plus their timings; `synced` is empty when only plain text exists. */
+    fun lyrics(track: Track): Pair<String?, List<LyricLine>> {
+        if (track.source != Source.YT_MUSIC) return null to emptyList()
         val o = unwrap(Core.ytLyrics(track.id)) as JSONObject
-        return o.optString("text").takeIf { it.isNotBlank() }
+        val text = o.optString("text").takeIf { it.isNotBlank() }
+        val synced = o.optJSONArray("synced")?.let { a ->
+            (0 until a.length()).mapNotNull { i ->
+                val l = a.getJSONObject(i)
+                LyricLine(l.optDouble("start", -1.0), l.optString("text"))
+            }.filter { it.start >= 0 && it.text.isNotBlank() }
+        } ?: emptyList()
+        return text to synced
     }
 
     /** Autoplay queue: same artist and genre, seeded by the track that just finished. */

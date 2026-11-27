@@ -14,6 +14,7 @@ import androidx.compose.ui.unit.sp
 
 /** A theme the user can pick: one accent seed drives the whole palette. */
 enum class Palette(val label: String, val seed: Long) {
+    COBALT("Cobalt", 0xFF2563EB),
     INDIGO("Indigo", 0xFF6C63FF),
     MINT("Mint", 0xFF22C55E),
     SUNSET("Sunset", 0xFFFF6B57),
@@ -28,8 +29,8 @@ enum class Palette(val label: String, val seed: Long) {
 enum class Mode { SYSTEM, LIGHT, DARK, AMOLED }
 
 data class ThemeState(
-    val palette: Palette = Palette.INDIGO,
-    val mode: Mode = Mode.DARK,
+    val palette: Palette = Palette.COBALT,
+    val mode: Mode = Mode.LIGHT,
     /** User-picked accent overrides the palette seed when set. */
     val customSeed: Long? = null,
     val dynamicFromArtwork: Boolean = true,

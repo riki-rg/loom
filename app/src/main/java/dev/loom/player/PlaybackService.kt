@@ -6,6 +6,7 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -24,6 +25,14 @@ class PlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         session = MediaSession.Builder(this, buildPlayer(this)).build()
+        // The EQ needs a live audio session id, which only ExoPlayer itself exposes.
+        session?.player?.let { p ->
+            p.addListener(object : Player.Listener {
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    if (isPlaying) (p as? ExoPlayer)?.audioSessionId?.takeIf { it != 0 }?.let(Eq::bind)
+                }
+            })
+        }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo) = session
