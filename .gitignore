@@ -1,0 +1,14 @@
+# Gradle / build output
+.gradle/
+build/
+app/build/
+core/target/
+
+# Local SDK + toolchain paths
+local.properties
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+keystore/

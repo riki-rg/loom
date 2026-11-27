@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Wrapper-free build: uses the local Gradle + JDK + SDK. No network for gradle itself.
+set -euo pipefail
+ROOT=$(cd "$(dirname "$0")" && pwd)
+export JAVA_HOME=/opt/data/tools/jdk21
+export ANDROID_HOME=/opt/data/tools/android-sdk
+export ANDROID_SDK_ROOT=$ANDROID_HOME
+export PATH=$JAVA_HOME/bin:$PATH
+exec /opt/data/tools/gradle/bin/gradle -p "$ROOT" "$@"
