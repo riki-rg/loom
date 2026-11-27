@@ -70,13 +70,16 @@ data class UiState(
     val error: String? = null,
     val shelves: List<Shelf> = emptyList(),
     val forYou: List<Shelf> = emptyList(),
-    val openPlaylist: OpenPlaylist? = null,
+    /** Keyed by tab: a detail page opened from For You must not appear on Home. */
+    val openPlaylist: Map<Tab, OpenPlaylist> = emptyMap(),
     val queue: List<Track> = emptyList(),
     val index: Int = -1,
     val playing: Boolean = false,
     val resolving: Boolean = false,
 ) {
     val current: Track? get() = queue.getOrNull(index)
+    /** The detail page for the tab currently shown, if any. */
+    val openHere: OpenPlaylist? get() = openPlaylist[tab]
 }
 
 class LoomViewModel(app: Application) : AndroidViewModel(app) {
@@ -109,6 +112,7 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setTab(t: Tab) {
+        // Detail pages live per tab, so switching never clears or leaks them.
         _state.value = _state.value.copy(tab = t)
         when (t) {
             Tab.HOME -> if (_state.value.shelves.isEmpty()) loadHome()
@@ -180,14 +184,21 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val res = withContext(Dispatchers.IO) { runCatching { Music.playlist(c.id, c.params) } }
             _state.value = res.fold(
-                onSuccess = { _state.value.copy(openPlaylist = OpenPlaylist(c.title, it), loading = false) },
+                onSuccess = {
+                    val tab = _state.value.tab
+                    _state.value.copy(
+                        openPlaylist = _state.value.openPlaylist + (tab to OpenPlaylist(c.title, it)),
+                        loading = false,
+                    )
+                },
                 onFailure = { _state.value.copy(loading = false, error = "Could not open playlist: " + it.short()) },
             )
         }
     }
 
     fun closePlaylist() {
-        _state.value = _state.value.copy(openPlaylist = null)
+        val tab = _state.value.tab
+        _state.value = _state.value.copy(openPlaylist = _state.value.openPlaylist - tab)
     }
 
     fun setQuery(q: String) {

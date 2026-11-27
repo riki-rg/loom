@@ -52,6 +52,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -90,35 +91,41 @@ fun Root(vm: LoomViewModel) {
         if (state.openPlayer) vm.loadLyrics()
     }
 
+    // One SaveableStateHolder keeps each tab's scroll offset, search text and expanded rows
+    // alive while it is off screen, so returning to a tab resumes where it was.
+    val tabStates = rememberSaveableStateHolder()
+
     Box(Modifier.fillMaxSize().background(ambientBrush(accent, accent2))) {
         // hazeSource marks this subtree as the thing the glass chrome blurs.
         Box(Modifier.fillMaxSize().statusBarsPadding().hazeSource(haze)) {
-            val open = state.openPlaylist
-            if (open != null) {
-                PlaylistDetail(open.title, state, vm::closePlaylist, vm::play, vm::toggleLike)
-            } else {
-                when (state.tab) {
-                    Tab.HOME -> HomeScreen(state, vm::openCollection)
-                    Tab.FOR_YOU -> ForYouScreen(state, vm::openCollection)
-                    Tab.PLAYLIST -> QueueScreen(
-                        state,
-                        vm::setLib,
-                        vm::openCollection,
-                        { t, q -> vm.play(t, q) },
-                        vm::toggleLike,
-                        vm::playQuery,
-                        vm::createPlaylist,
-                        vm::removePlaylist,
-                    )
-                    Tab.SEARCH -> SearchScreen(
-                        state,
-                        vm::setQuery,
-                        vm::search,
-                        vm::playQuery,
-                        { t -> vm.play(t) },
-                        vm::toggleLike,
-                    )
-                    Tab.SETTINGS -> SettingsScreen(vm, theme)
+            tabStates.SaveableStateProvider(state.tab.name) {
+                val open = state.openHere
+                if (open != null) {
+                    PlaylistDetail(open.title, state, vm::closePlaylist, vm::play, vm::toggleLike)
+                } else {
+                    when (state.tab) {
+                        Tab.HOME -> HomeScreen(state, vm::openCollection)
+                        Tab.FOR_YOU -> ForYouScreen(state, vm::openCollection)
+                        Tab.PLAYLIST -> QueueScreen(
+                            state,
+                            vm::setLib,
+                            vm::openCollection,
+                            { t, q -> vm.play(t, q) },
+                            vm::toggleLike,
+                            vm::playQuery,
+                            vm::createPlaylist,
+                            vm::removePlaylist,
+                        )
+                        Tab.SEARCH -> SearchScreen(
+                            state,
+                            vm::setQuery,
+                            vm::search,
+                            vm::playQuery,
+                            { t -> vm.play(t) },
+                            vm::toggleLike,
+                        )
+                        Tab.SETTINGS -> SettingsScreen(vm, theme)
+                    }
                 }
             }
         }
@@ -183,7 +190,7 @@ private fun HomeScreen(state: UiState, onOpen: (Collection) -> Unit) {
         state.shelves.isEmpty() -> EmptyState("Nothing to show", "Could not reach YouTube Music.")
         else -> LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 190.dp)) {
             item { BrandHeader("Loom", "Home") }
-            items(state.shelves) { shelf -> ShelfRow(shelf.title, shelf.items, onOpen) }
+            items(state.shelves, key = { "hs" + it.title }) { shelf -> ShelfRow(shelf.title, shelf.items, onOpen) }
         }
     }
 }
@@ -196,7 +203,7 @@ private fun ForYouScreen(state: UiState, onOpen: (Collection) -> Unit) {
     }
     LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 190.dp)) {
         item { BrandHeader("For You", "New releases, charts and videos") }
-        items(state.forYou) { shelf -> ShelfRow(shelf.title, shelf.items, onOpen) }
+        items(state.forYou, key = { "fs" + it.title }) { shelf -> ShelfRow(shelf.title, shelf.items, onOpen) }
     }
 }
 
@@ -339,7 +346,7 @@ private fun PlaylistDetail(
     onPlay: (Track, List<Track>) -> Unit,
     onLike: (Track) -> Unit,
 ) {
-    val tracks = state.openPlaylist?.tracks ?: emptyList()
+    val tracks = state.openHere?.tracks ?: emptyList()
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().padding(start = 8.dp, top = 6.dp),

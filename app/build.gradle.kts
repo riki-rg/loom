@@ -24,8 +24,8 @@ android {
         applicationId = "dev.loom"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.6.1"
+        versionCode = 10
+        versionName = "0.7.0"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
@@ -80,6 +80,9 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.5.1")
     implementation("androidx.media3:media3-session:1.5.1")
     implementation("io.coil-kt:coil-compose:2.7.0")
+    // Coil reads this resource at startup: shared OkHttp client, memory+disk cache sized for
+    // scrolling shelves, and RGB_565 bitmaps. Covers are opaque, so alpha buys nothing.
+    implementation("io.coil-kt:coil:2.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     // Real backdrop blur for the glass chrome; its Compose 1.7.x line matches the BOM above.
     implementation("dev.chrisbanes.haze:haze:1.2.0")
