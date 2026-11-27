@@ -29,6 +29,24 @@ android {
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            all {
+                // Robolectric downloads android-all from Maven; point it at the jar we already
+                // have so it does not fight the slow link mid-test.
+                it.systemProperty("robolectric.offline", "true")
+                it.systemProperty(
+                    "robolectric.dependency.dir",
+                    rootProject.file("robolectric-deps").absolutePath,
+                )
+                // Robolectric resolves android-all-<sdk> by exact filename in offline mode.
+                it.systemProperty("robolectric.dependency.repo.url", "https://repo1.maven.org/maven2")
+                it.maxHeapSize = "2g"
+            }
+        }
+    }
+
     signingConfigs {
         if (keystoreProps.isNotEmpty()) {
             create("release") {
@@ -90,5 +108,9 @@ dependencies {
     // JVM-only: lets the JSON parsing be checked without a device.
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+    // Real Skia rendering on the JVM: Compose screenshots without an emulator or /dev/kvm.
+    testImplementation("org.robolectric:robolectric:4.15.1")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 
 }
