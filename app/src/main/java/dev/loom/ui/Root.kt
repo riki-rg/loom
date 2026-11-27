@@ -95,7 +95,7 @@ fun Root(vm: LoomViewModel) {
         Box(Modifier.fillMaxSize().statusBarsPadding().hazeSource(haze)) {
             val open = state.openPlaylist
             if (open != null) {
-                PlaylistDetail(open.title, state, vm::closePlaylist, vm::play)
+                PlaylistDetail(open.title, state, vm::closePlaylist, vm::play, vm::toggleLike)
             } else {
                 when (state.tab) {
                     Tab.HOME -> HomeScreen(state, vm::openCollection)
@@ -157,6 +157,10 @@ fun Root(vm: LoomViewModel) {
                 positionMs = position.first,
                 durationMs = position.second,
                 liked = state.current?.let { vm.isLiked(it) } ?: false,
+                shuffle = state.shuffle,
+                repeat = state.repeat,
+                onShuffle = vm::toggleShuffle,
+                onRepeat = vm::toggleRepeat,
                 onClose = vm::closePlayer,
                 onToggle = vm::togglePlay,
                 onSkip = vm::skip,
@@ -333,6 +337,7 @@ private fun PlaylistDetail(
     state: UiState,
     onBack: () -> Unit,
     onPlay: (Track, List<Track>) -> Unit,
+    onLike: (Track) -> Unit,
 ) {
     val tracks = state.openPlaylist?.tracks ?: emptyList()
     Column(Modifier.fillMaxSize()) {
@@ -354,7 +359,9 @@ private fun PlaylistDetail(
                     )
                 }
                 items(tracks, key = { it.source.name + it.id }) { t ->
-                    TrackRow(t, selected = state.current?.id == t.id) { onPlay(t, tracks) }
+                    TrackRow(t, selected = state.current?.id == t.id, onLike = { onLike(t) }) {
+                        onPlay(t, tracks)
+                    }
                 }
             }
         }

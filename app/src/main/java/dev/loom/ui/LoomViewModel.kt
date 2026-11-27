@@ -64,6 +64,8 @@ data class UiState(
     val playlists: List<dev.loom.core.NamedPlaylist> = emptyList(),
     val lyrics: String? = null,
     val openPlayer: Boolean = false,
+    val shuffle: Boolean = false,
+    val repeat: Boolean = false,
     val loading: Boolean = false,
     val error: String? = null,
     val shelves: List<Shelf> = emptyList(),
@@ -291,6 +293,11 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(playlists = store.playlists)
     }
 
+    fun toggleShuffle() { _state.value = _state.value.copy(shuffle = !_state.value.shuffle) }
+
+    /** Repeat replays the same track on end instead of advancing. */
+    fun toggleRepeat() { _state.value = _state.value.copy(repeat = !_state.value.repeat) }
+
     fun togglePlay() {
         val s = _state.value
         if (s.current == null) return
@@ -310,6 +317,17 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
     fun onTrackEnded() {
         val s = _state.value
         if (s.queue.isEmpty()) return
+        if (s.repeat) {
+            play(s.queue[s.index], s.queue)
+            return
+        }
+        if (s.shuffle && s.queue.size > 1) {
+            // Never repeat the track that just ended.
+            val next = s.queue.indices.filter { it != s.index }.random()
+            _state.value = s.copy(index = next)
+            play(s.queue[next], s.queue)
+            return
+        }
         if (s.index < s.queue.lastIndex) {
             skip(1)
         } else {

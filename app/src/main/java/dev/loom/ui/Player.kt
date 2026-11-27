@@ -84,6 +84,10 @@ fun NowPlayingSheet(
     positionMs: Long,
     durationMs: Long,
     liked: Boolean,
+    shuffle: Boolean,
+    repeat: Boolean,
+    onShuffle: () -> Unit,
+    onRepeat: () -> Unit,
     onClose: () -> Unit,
     onToggle: () -> Unit,
     onSkip: (Int) -> Unit,
@@ -97,14 +101,18 @@ fun NowPlayingSheet(
     var picker by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
 
-    Box(Modifier.fillMaxSize().background(ambientBrush(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.secondary))) {
-        // Blurred cover as the backdrop so the sheet is tinted by the album art, not a flat fill.
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
+        // Tinted wash over an opaque base: the sheet must never let the library show through.
         AsyncImage(
             model = t.art,
             contentDescription = null,
             contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize().blur(60.dp).graphicsLayer { alpha = 0.35f },
+            modifier = Modifier
+                .fillMaxSize()
+                .blur(70.dp)
+                .graphicsLayer { alpha = 0.28f },
         )
+        Box(Modifier.fillMaxSize().background(ambientBrush(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.secondary)))
 
         Column(
             Modifier
@@ -243,11 +251,21 @@ fun NowPlayingSheet(
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = {}) {
-                    Icon(Icons.Rounded.Shuffle, contentDescription = "Shuffle", modifier = Modifier.size(21.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                IconButton(onClick = { onShuffle() }) {
+                    Icon(
+                        Icons.Rounded.Shuffle,
+                        contentDescription = if (shuffle) "Shuffle on" else "Shuffle off",
+                        modifier = Modifier.size(21.dp),
+                        tint = if (shuffle) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
-                IconButton(onClick = {}) {
-                    Icon(Icons.Rounded.Repeat, contentDescription = "Repeat", modifier = Modifier.size(21.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                IconButton(onClick = { onRepeat() }) {
+                    Icon(
+                        Icons.Rounded.Repeat,
+                        contentDescription = "Repeat ${if (repeat) "on" else "off"}",
+                        modifier = Modifier.size(21.dp),
+                        tint = if (repeat) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
                 IconButton(onClick = onLike) {
                     Icon(

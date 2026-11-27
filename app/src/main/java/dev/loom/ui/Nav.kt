@@ -1,21 +1,21 @@
 package dev.loom.ui
 
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.runtime.remember
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -31,13 +31,16 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import dev.chrisbanes.haze.HazeState
 
 private fun Tab.icon(): ImageVector = when (this) {
@@ -49,86 +52,94 @@ private fun Tab.icon(): ImageVector = when (this) {
 }
 
 /**
- * Floating centered nav bar. A filled bubble marks the active tab: the pill grows, the label
- * fades in, and a soft halo behind it expands with a spring so the move reads as one gesture.
- * Labels only show for the active tab so five items fit a narrow phone.
+ * Floating centered nav bar with a sliding bubble.
+ *
+ * Every tab gets an equal-width slot and the bar keeps a fixed height, so moving the bubble
+ * never changes the bar's own size. The bubble is one element translated behind the icons:
+ * changing its position cannot reflow the row, which is what made the earlier version distort.
  */
 @Composable
 fun FloatingNav(current: Tab, haze: HazeState, onPick: (Tab) -> Unit) {
-    Box(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Row(
+    Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
+        BoxWithConstraints(
             Modifier
-                .glass(haze, color = Color(0xFF12141C).copy(alpha = 0.35f), corner = 28, blur = 30)
-                .padding(horizontal = 8.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .fillMaxWidth()
+                .height(62.dp)
+                .glass(haze, color = Color(0xFF12141C).copy(alpha = 0.35f), corner = 31, blur = 30),
         ) {
-            Tab.entries.forEach { tab ->
-                val active = tab == current
-                val pad by animateDpAsState(
-                    if (active) 14.dp else 12.dp,
-                    spring(dampingRatio = 0.55f, stiffness = 400f),
-                    label = "navPad",
-                )
-                // Bubble: scales up and fades in; the reverse plays on the tab losing focus.
-                val bubble by animateFloatAsState(
-                    if (active) 1f else 0f,
-                    spring(dampingRatio = 0.6f, stiffness = 500f),
-                    label = "bubble",
-                )
-                val labelAlpha by animateFloatAsState(
-                    if (active) 1f else 0f,
-                    tween(if (active) 180 else 90, delayMillis = if (active) 60 else 0),
-                    label = "label",
-                )
-                Box(
-                    Modifier
-                        .graphicsLayer {
-                            // Halo swells slightly past the pill, then settles.
-                            scaleX = 1f + (bubble * 0.06f)
-                            scaleY = 1f + (bubble * 0.06f)
-                        }
-                        .clip(RoundedCornerShape(50))
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                        ) { onPick(tab) }
-                        .padding(horizontal = pad, vertical = 10.dp),
-                ) {
-                    // The bubble itself, drawn behind the content.
-                    Box(
+            val tabs = Tab.entries
+            val slot = maxWidth / tabs.size
+            val index = tabs.indexOf(current).coerceAtLeast(0)
+
+            // One spring drives the bubble; no per-tab width animation anywhere.
+            val slide by animateFloatAsState(
+                targetValue = index * slot.value,
+                animationSpec = spring(dampingRatio = 0.72f, stiffness = 380f),
+                label = "bubbleSlide",
+            )
+
+            Box(
+                Modifier
+                    .offset(x = slide.dp)
+                    .width(slot)
+                    .fillMaxHeight()
+                    .padding(horizontal = 7.dp, vertical = 7.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(MaterialTheme.colorScheme.primary),
+            )
+
+            Row(Modifier.fillMaxWidth().fillMaxHeight()) {
+                tabs.forEach { tab ->
+                    val active = tab == current
+                    val tint by animateFloatAsState(if (active) 1f else 0f, tween(200), label = "tint")
+                    Column(
                         Modifier
-                            .matchParentSize()
-                            .graphicsLayer { alpha = bubble }
-                            .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(50)),
-                    )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                            .width(slot)
+                            .fillMaxHeight()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                            ) { onPick(tab) },
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
                         Icon(
                             tab.icon(),
                             contentDescription = tab.label,
-                            tint = if (active) MaterialTheme.colorScheme.onPrimary
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = lerpColor(
+                                MaterialTheme.colorScheme.onSurfaceVariant,
+                                MaterialTheme.colorScheme.onPrimary,
+                                tint,
+                            ),
                             modifier = Modifier.size(21.dp),
                         )
-                        if (labelAlpha > 0.01f) {
-                            Spacer(Modifier.width(7.dp))
-                            Text(
-                                tab.label,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = labelAlpha),
-                                maxLines = 1,
-                                overflow = TextOverflow.Clip,
-                            )
-                        }
+                        Spacer(Modifier.height(3.dp))
+                        // Always present so the row height never depends on the selection.
+                        Text(
+                            tab.label,
+                            fontSize = 9.5.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Clip,
+                            color = lerpColor(
+                                MaterialTheme.colorScheme.onSurfaceVariant,
+                                MaterialTheme.colorScheme.onPrimary,
+                                tint,
+                            ),
+                            modifier = Modifier.graphicsLayer { alpha = 0.55f + 0.45f * tint },
+                        )
                     }
                 }
             }
         }
     }
 }
+
+private fun lerpColor(from: Color, to: Color, t: Float): Color = Color(
+    red = from.red + (to.red - from.red) * t,
+    green = from.green + (to.green - from.green) * t,
+    blue = from.blue + (to.blue - from.blue) * t,
+    alpha = from.alpha + (to.alpha - from.alpha) * t,
+)
 
 /** Empty state that does not look like an error. */
 @Composable
