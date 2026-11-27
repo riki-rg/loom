@@ -125,6 +125,18 @@ class Store(ctx: Context) {
         return true
     }
 
+    /** Bulk add for imports: one write for the whole list instead of one per track. */
+    fun addAllToPlaylist(name: String, tracks: List<Track>): Int {
+        val target = playlists.firstOrNull { it.name == name } ?: return 0
+        val seen = target.tracks.map { it.source.name + it.id }.toMutableSet()
+        val added = tracks.filter { seen.add(it.source.name + it.id) }
+        if (added.isEmpty()) return 0
+        playlists = playlists.map {
+            if (it.name == name) it.copy(tracks = it.tracks + added) else it
+        }
+        return added.size
+    }
+
     fun removePlaylist(name: String) {
         playlists = playlists.filterNot { it.name == name }
     }

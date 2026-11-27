@@ -32,6 +32,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import dev.loom.core.Music
+import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.animation.AnimatedVisibility
@@ -115,16 +117,24 @@ fun Root(vm: LoomViewModel) {
                     when (state.tab) {
                         Tab.HOME -> HomeScreen(state, vm::openCollection)
                         Tab.FOR_YOU -> ForYouScreen(state, vm::openCollection)
-                        Tab.PLAYLIST -> QueueScreen(
-                            state,
-                            vm::setLib,
-                            vm::openCollection,
-                            { t, q -> vm.play(t, q) },
-                            vm::toggleLike,
-                            vm::playQuery,
-                            vm::createPlaylist,
-                            vm::removePlaylist,
-                        )
+                        Tab.PLAYLIST -> {
+                            val imp by vm.importing.collectAsState()
+                            QueueScreen(
+                                state,
+                                vm::setLib,
+                                vm::openCollection,
+                                { t, q -> vm.play(t, q) },
+                                vm::toggleLike,
+                                vm::playQuery,
+                                vm::createPlaylist,
+                                vm::removePlaylist,
+                                imp,
+                                vm::setImportSource,
+                                vm::setImportInput,
+                                vm::runImport,
+                                vm::closeImport,
+                            )
+                        }
                         Tab.SEARCH -> SearchScreen(
                             state,
                             vm::setQuery,
@@ -258,8 +268,15 @@ private fun QueueScreen(
     onPlayQuery: (String) -> Unit,
     onCreatePlaylist: (String) -> Boolean,
     onRemovePlaylist: (String) -> Unit,
+    importState: LoomViewModel.Importing,
+    onImportSource: (Source) -> Unit,
+    onImportInput: (String) -> Unit,
+    onImportRun: (String) -> Unit,
+    onImportClose: () -> Unit,
 ) {
     var naming by remember { mutableStateOf(false) }
+    var importing by remember { mutableStateOf(false) }
+    var importName by remember { mutableStateOf("") }
     var draft by remember { mutableStateOf("") }
     LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 190.dp)) {
         item { BrandHeader("Library", "Yours, kept on this device") }
@@ -280,6 +297,9 @@ private fun QueueScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text("My playlists", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
+                        IconButton(onClick = { importing = true }) {
+                            Icon(Icons.Rounded.FileDownload, contentDescription = "Import playlist")
+                        }
                         IconButton(onClick = { naming = true }) {
                             Icon(Icons.Rounded.Add, contentDescription = "New playlist")
                         }
@@ -353,6 +373,75 @@ private fun QueueScreen(
                 }
             }
         }
+    }
+
+    if (importing) {
+        AlertDialog(
+            onDismissRequest = { importing = false; importName = ""; onImportClose() },
+            title = { Text("Import playlist") },
+            text = {
+                Column {
+                    Text(
+                        "Paste a playlist link. Spotify, YouTube Music and Deezer all work.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Music.importable.forEach { s ->
+                            Chip(s.label, s == importState.source) { onImportSource(s) }
+                        }
+                    }
+                    Spacer(Modifier.height(14.dp))
+                    OutlinedTextField(
+                        value = importState.input,
+                        onValueChange = onImportInput,
+                        placeholder = {
+                            Text(
+                                when (importState.source) {
+                                    Source.SPOTIFY -> "open.spotify.com/playlist/…"
+                                    Source.DEEZER -> "deezer.com/playlist/…"
+                                    else -> "music.youtube.com/playlist?list=…"
+                                },
+                            )
+                        },
+                        singleLine = true,
+                        enabled = !importState.busy,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = importName,
+                        onValueChange = { importName = it },
+                        placeholder = { Text("Name (optional)") },
+                        singleLine = true,
+                        enabled = !importState.busy,
+                    )
+                    importState.error?.let {
+                        Spacer(Modifier.height(10.dp))
+                        Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+                    }
+                    importState.done?.let {
+                        Spacer(Modifier.height(10.dp))
+                        Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = importState.input.isNotBlank() && !importState.busy,
+                    onClick = { onImportRun(importName) },
+                ) {
+                    if (importState.busy) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text("Import")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { importing = false; importName = ""; onImportClose() }) { Text("Close") }
+            },
+        )
     }
 
     if (naming) {

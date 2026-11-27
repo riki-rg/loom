@@ -337,6 +337,63 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(playlists = store.playlists)
     }
 
+    /** Import state, kept separate so the library list never flickers during a fetch. */
+    data class Importing(
+        val source: Source = Source.SPOTIFY,
+        val input: String = "",
+        val busy: Boolean = false,
+        val error: String? = null,
+        val done: String? = null,
+    )
+
+    private val _import = MutableStateFlow(Importing())
+    val importing: StateFlow<Importing> = _import.asStateFlow()
+
+    fun setImportSource(s: Source) { _import.value = _import.value.copy(source = s, error = null, done = null) }
+    fun setImportInput(v: String) { _import.value = _import.value.copy(input = v, error = null, done = null) }
+    fun closeImport() { _import.value = Importing() }
+
+    /**
+     * Pull a playlist and save it as a named playlist. The name comes from the user when they
+     * gave one, otherwise from the provider and the track count, so an import never lands as
+     * an unlabelled blob.
+     */
+    fun runImport(name: String) {
+        val req = _import.value
+        if (req.input.isBlank() || req.busy) return
+        _import.value = req.copy(busy = true, error = null, done = null)
+        viewModelScope.launch {
+            val res = withContext(Dispatchers.IO) {
+                runCatching { Music.importPlaylist(req.source, req.input) }
+            }
+            res.fold(
+                onSuccess = { imported ->
+                    val base = name.trim().ifBlank {
+                        "${req.source.label} · ${imported.tracks.size} tracks"
+                    }
+                    // Pick a free name first, then create once — createPlaylist refuses duplicates.
+                    var final = base
+                    var n = 2
+                    while (store.playlists.any { it.name.equals(final, ignoreCase = true) }) {
+                        final = "$base ($n)"
+                        n++
+                    }
+                    store.createPlaylist(final)
+                    val added = store.addAllToPlaylist(final, imported.tracks)
+                    _state.value = _state.value.copy(playlists = store.playlists, lib = Lib.PLAYLISTS)
+                    _import.value = _import.value.copy(
+                        busy = false,
+                        done = "$added tracks imported into $final",
+                        input = "",
+                    )
+                },
+                onFailure = {
+                    _import.value = _import.value.copy(busy = false, error = it.short())
+                },
+            )
+        }
+    }
+
     fun toggleShuffle() { _state.value = _state.value.copy(shuffle = !_state.value.shuffle) }
 
     /** Repeat replays the same track on end instead of advancing. */

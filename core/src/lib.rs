@@ -808,6 +808,170 @@ fn sc_stream(track_id: &str) -> Result<Value, String> {
     }))
 }
 
+// ---------- Deezer ----------
+// The public API needs no key and answers anonymously. Playback is Deezer's own 30s preview
+// MP3: full tracks need a user token. Import is the reason this exists, so previews are fine.
+
+fn dz_get(url: &str) -> Result<Value, String> {
+    let res: Value = http()
+        .get(url)
+        .header("User-Agent", UA_WEB)
+        .send()
+        .map_err(|e| e.to_string())?
+        .json()
+        .map_err(|e| e.to_string())?;
+    // Deezer signals errors as {"error":{...}} with HTTP 200.
+    if let Some(e) = res.get("error") {
+        return Err(format!("deezer: {}", e.get("message").and_then(|m| m.as_str()).unwrap_or("error")));
+    }
+    Ok(res)
+}
+
+fn dz_track(t: &Value) -> Option<Value> {
+    let id = t.get("id")?.as_u64()?;
+    Some(json!({
+        "id": id.to_string(),
+        "title": t.get("title").and_then(|x| x.as_str()).unwrap_or(""),
+        "artist": t.pointer("/artist/name").and_then(|x| x.as_str()).unwrap_or(""),
+        "album": t.pointer("/album/title").and_then(|x| x.as_str()).unwrap_or(""),
+        "art": t.pointer("/album/cover_medium").and_then(|x| x.as_str()).unwrap_or(""),
+        "duration": t.get("duration").and_then(|x| x.as_u64()).unwrap_or(0) * 1000
+    }))
+}
+
+fn dz_search(query: &str) -> Result<Value, String> {
+    let res = dz_get(&format!(
+        "https://api.deezer.com/search?q={}&limit=25",
+        urlencode(query)
+    ))?;
+    let out: Vec<Value> = res
+        .get("data")
+        .and_then(|d| d.as_array())
+        .map(|a| a.iter().filter_map(dz_track).collect())
+        .unwrap_or_default();
+    Ok(json!(out))
+}
+
+/// Deezer previews are short-lived signed URLs, so they are fetched at play time, not stored.
+fn dz_preview(track_id: &str) -> Result<Value, String> {
+    let res = dz_get(&format!("https://api.deezer.com/track/{track_id}"))?;
+    let url = res
+        .get("preview")
+        .and_then(|p| p.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or("deezer: no preview for this track")?;
+    Ok(json!({ "url": url, "mime": "audio/mpeg", "ua": UA_WEB, "preview": true }))
+}
+
+// ---------- Playlist import ----------
+// One entry point per provider, all returning the same track shape so Kotlin needs no
+// per-provider branch. Input is whatever the user pasted: a URL, a share link, or a bare id.
+
+/// Pulls the first id-looking segment out of a URL or returns the trimmed input unchanged.
+fn id_from(input: &str, prefixes: &[&str]) -> String {
+    let s = input.trim();
+    for p in prefixes {
+        if let Some(i) = s.find(p) {
+            let rest = &s[i + p.len()..];
+            let end = rest
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+                .unwrap_or(rest.len());
+            if end > 0 {
+                return rest[..end].to_string();
+            }
+        }
+    }
+    // No marker matched: assume the caller passed a bare id, minus any query string.
+    s.split(['?', '&', '#']).next().unwrap_or(s).trim_matches('/').to_string()
+}
+
+fn import_yt(playlist_id: &str) -> Result<Value, String> {
+    let id = id_from(playlist_id, &["list=", "/playlist/"]);
+    let browse = format!("VL{id}");
+    let res = yt_browse(&browse, None)?;
+    let mut out = Vec::new();
+    collect_items(&res, &mut out);
+    if out.is_empty() {
+        collect_playlist_rows(&res, &mut out);
+    }
+    Ok(json!(out))
+}
+
+fn import_deezer(playlist_id: &str) -> Result<Value, String> {
+    let id = id_from(playlist_id, &["/playlist/", "playlist/"]);
+    let res = dz_get(&format!("https://api.deezer.com/playlist/{id}/tracks?limit=100"))?;
+    let out: Vec<Value> = res
+        .get("data")
+        .and_then(|d| d.as_array())
+        .map(|a| a.iter().filter_map(dz_track).collect())
+        .unwrap_or_default();
+    if out.is_empty() {
+        return Err("deezer: playlist is empty or private".into());
+    }
+    Ok(json!(out))
+}
+
+/// Spotify playlists are read from the embed page's `__NEXT_DATA__`, which carries the full
+/// track list with title, artist and duration. No OAuth, no client secret.
+fn import_spotify(playlist_id: &str) -> Result<Value, String> {
+    let id = id_from(playlist_id, &["/playlist/", "playlist:"]);
+    let html = http()
+        .get(format!("https://open.spotify.com/embed/playlist/{id}"))
+        .header("User-Agent", SP_PLAYER_UA)
+        .send()
+        .map_err(|e| e.to_string())?
+        .text()
+        .map_err(|e| e.to_string())?;
+    let json_text = extract_next_data(&html).ok_or("spotify: playlist not readable (private?)")?;
+    let data: Value = serde_json::from_str(&json_text).map_err(|e| e.to_string())?;
+    let entity = data
+        .pointer("/props/pageProps/state/data/entity")
+        .ok_or("spotify: unexpected payload")?;
+    let list = entity
+        .get("trackList")
+        .and_then(|t| t.as_array())
+        .ok_or("spotify: no tracks")?;
+    // Per-track cover art is absent from the embed payload; the playlist's own cover is the
+    // only image available, so it stands in for every row.
+    let list_art = entity
+        .pointer("/coverArt/sources/0/url")
+        .and_then(|u| u.as_str())
+        .unwrap_or("");
+    let out: Vec<Value> = list
+        .iter()
+        .filter_map(|t| {
+            let uri = t.get("uri").and_then(|u| u.as_str())?;
+            let tid = uri.rsplit(':').next()?;
+            let art = t
+                .pointer("/coverArt/sources")
+                .and_then(|s| s.as_array())
+                .and_then(|a| a.last())
+                .and_then(|s| s.get("url"))
+                .and_then(|u| u.as_str())
+                .unwrap_or(list_art);
+            Some(json!({
+                "id": tid,
+                "title": t.get("title").and_then(|x| x.as_str()).unwrap_or(""),
+                "artist": t.get("subtitle").and_then(|x| x.as_str()).unwrap_or(""),
+                "album": "",
+                "art": art,
+                "duration": t.get("duration").and_then(|x| x.as_u64()).unwrap_or(0)
+            }))
+        })
+        .collect();
+    if out.is_empty() {
+        return Err("spotify: playlist is empty or private".into());
+    }
+    Ok(json!(out))
+}
+
+fn extract_next_data(html: &str) -> Option<String> {
+    let marker = "<script id=\"__NEXT_DATA__\" type=\"application/json\">";
+    let start = html.find(marker)? + marker.len();
+    let end = html[start..].find("</script>")? + start;
+    Some(html[start..end].to_string())
+}
+
 // ---------- JNI bridge ----------
 
 fn to_jstring(env: &mut JNIEnv, s: String) -> jstring {
@@ -875,6 +1039,37 @@ pub extern "system" fn Java_dev_loom_core_Core_resolveSpotify(
 }
 
 #[no_mangle]
+pub extern "system" fn Java_dev_loom_core_Core_searchDeezer(
+    mut env: JNIEnv, _c: JClass, q: JString,
+) -> jstring {
+    let q = arg(&mut env, &q);
+    run(&mut env, || dz_search(&q))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_loom_core_Core_resolveDeezer(
+    mut env: JNIEnv, _c: JClass, id: JString,
+) -> jstring {
+    let id = arg(&mut env, &id);
+    run(&mut env, || dz_preview(&id))
+}
+
+/// `provider` picks the importer: "yt", "ytm", "spotify" or "deezer".
+#[no_mangle]
+pub extern "system" fn Java_dev_loom_core_Core_importPlaylist(
+    mut env: JNIEnv, _c: JClass, provider: JString, input: JString,
+) -> jstring {
+    let p = arg(&mut env, &provider);
+    let i = arg(&mut env, &input);
+    run(&mut env, || match p.as_str() {
+        "yt" | "ytm" => import_yt(&i),
+        "spotify" => import_spotify(&i),
+        "deezer" => import_deezer(&i),
+        other => Err(format!("unknown provider: {other}")),
+    })
+}
+
+#[no_mangle]
 pub extern "system" fn Java_dev_loom_core_Core_ytHome(mut env: JNIEnv, _c: JClass) -> jstring {
     run(&mut env, yt_home)
 }
@@ -917,6 +1112,45 @@ pub extern "system" fn Java_dev_loom_core_Core_ytLyrics(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn id_extraction_handles_urls_and_bare_ids() {
+        // Every shape a user might paste: share link, watch link, mobile link, bare id.
+        assert_eq!(
+            id_from("https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=abc", &["/playlist/"]),
+            "37i9dQZF1DXcBWIGoYBM5M"
+        );
+        assert_eq!(
+            id_from("https://www.deezer.com/en/playlist/908622995", &["/playlist/"]),
+            "908622995"
+        );
+        assert_eq!(
+            id_from("https://music.youtube.com/playlist?list=PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI&si=x", &["list="]),
+            "PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI"
+        );
+        assert_eq!(id_from("  37i9dQZF1DXcBWIGoYBM5M  ", &["/playlist/"]), "37i9dQZF1DXcBWIGoYBM5M");
+        assert_eq!(id_from("spotify:playlist:37i9dQZF1DXcBWIGoYBM5M", &["playlist:"]), "37i9dQZF1DXcBWIGoYBM5M");
+    }
+
+    #[test]
+    fn next_data_is_extracted_from_embed_html() {
+        let html = r#"<html><script id="__NEXT_DATA__" type="application/json">{"a":1}</script></html>"#;
+        assert_eq!(extract_next_data(html).as_deref(), Some(r#"{"a":1}"#));
+        assert_eq!(extract_next_data("<html>nothing</html>"), None);
+    }
+
+    #[test]
+    fn deezer_track_maps_duration_to_ms() {
+        let t = json!({
+            "id": 116348632, "title": "Hey Jude", "duration": 429,
+            "artist": {"name": "The Beatles"},
+            "album": {"title": "1", "cover_medium": "https://x/y.jpg"}
+        });
+        let m = dz_track(&t).unwrap();
+        assert_eq!(m["duration"], 429000);
+        assert_eq!(m["id"], "116348632");
+        assert_eq!(m["artist"], "The Beatles");
+    }
 
     #[test]
     fn client_id_from_html_and_js() {
@@ -1046,5 +1280,24 @@ mod tests {
         assert!(url.starts_with("https://"), "bad url: {url}");
         assert!(s["bitrate"].as_u64().unwrap_or(0) > 0, "no bitrate");
         println!("stream bitrate={} mime={}", s["bitrate"], s["mime"]);
+    }
+}
+
+#[cfg(test)]
+mod import_live {
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn live_import_all_providers() {
+        let sp = import_spotify("https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M").expect("spotify");
+        println!("spotify {} tracks, first: {}", sp.as_array().unwrap().len(), sp[0]);
+        let dz = import_deezer("https://www.deezer.com/en/playlist/908622995").expect("deezer");
+        println!("deezer {} tracks, first: {}", dz.as_array().unwrap().len(), dz[0]);
+        let yt = import_yt("https://music.youtube.com/playlist?list=PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI").expect("yt");
+        println!("yt {} tracks, first: {}", yt.as_array().unwrap().len(), yt[0]);
+        assert!(!sp.as_array().unwrap().is_empty());
+        assert!(!dz.as_array().unwrap().is_empty());
+        assert!(!yt.as_array().unwrap().is_empty());
     }
 }

@@ -17,6 +17,10 @@ object Core {
     @JvmStatic external fun resolveSoundCloud(id: String): String
     @JvmStatic external fun searchSpotify(query: String): String
     @JvmStatic external fun resolveSpotify(id: String): String
+    @JvmStatic external fun searchDeezer(query: String): String
+    @JvmStatic external fun resolveDeezer(id: String): String
+    /** provider: "yt", "spotify" or "deezer"; input may be a URL, share link or bare id. */
+    @JvmStatic external fun importPlaylist(provider: String, input: String): String
     @JvmStatic external fun ytHome(): String
     @JvmStatic external fun ytForYou(): String
     @JvmStatic external fun ytRadio(id: String): String
@@ -48,6 +52,7 @@ enum class Source(val label: String) {
     YT_MUSIC("YouTube Music"),
     SPOTIFY("Spotify"),
     SOUNDCLOUD("SoundCloud"),
+    DEEZER("Deezer"),
 }
 
 data class Stream(val url: String, val userAgent: String, val preview: Boolean = false)
@@ -104,6 +109,35 @@ object Music {
         Source.YT_MUSIC -> parseTracks(Core.searchYtMusic(query), source)
         Source.SPOTIFY -> parseTracks(Core.searchSpotify(query), source)
         Source.SOUNDCLOUD -> parseTracks(Core.searchSoundCloud(query), source)
+        Source.DEEZER -> parseTracks(Core.searchDeezer(query), source)
+    }
+
+    /** Providers that can be imported from a pasted link or id. */
+    val importable: List<Source> = listOf(
+        Source.SPOTIFY,
+        Source.YT_MUSIC,
+        Source.DEEZER,
+    )
+
+    /** One imported playlist: its name (when the provider exposes one) and its tracks. */
+    data class Imported(val tracks: List<Track>)
+
+    /**
+     * Import a playlist from a pasted URL, share link or bare id. Tracks keep the provider they
+     * came from, so playback resolves through that provider's own path; `bestStream` already
+     * prefers a full YouTube copy over a preview, so an imported Spotify list still plays full
+     * length when a match exists.
+     */
+    fun importPlaylist(source: Source, input: String): Imported {
+        val provider = when (source) {
+            Source.SPOTIFY -> "spotify"
+            Source.DEEZER -> "deezer"
+            Source.YT_MUSIC -> "ytm"
+            Source.SOUNDCLOUD -> throw CoreException("SoundCloud sets cannot be imported")
+        }
+        val tracks = parseTracks(Core.importPlaylist(provider, input), source)
+        if (tracks.isEmpty()) throw CoreException("that playlist has no tracks")
+        return Imported(tracks)
     }
 
     fun stream(track: Track): Stream {
@@ -111,6 +145,7 @@ object Music {
             Source.YT_MUSIC -> Core.resolveYtMusic(track.id)
             Source.SPOTIFY -> Core.resolveSpotify(track.id)
             Source.SOUNDCLOUD -> Core.resolveSoundCloud(track.id)
+            Source.DEEZER -> Core.resolveDeezer(track.id)
         }
         val o = unwrap(raw) as JSONObject
         return Stream(
