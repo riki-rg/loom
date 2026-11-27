@@ -238,6 +238,6 @@ fun PickerRow(labels: List<String>, selected: String, onPick: (String) -> Unit) 
         Modifier.fillMaxWidth().padding(horizontal = 20.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        labels.forEach { l -> Chip(l, l == selected) { onPick(l) } }
+        labels.forEach { l -> Chip(l, l == selected, onClick = { onPick(l) }) }
     }
 }

@@ -2,6 +2,15 @@ package dev.loom.ui
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.snap
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -51,6 +60,8 @@ fun NowPlayingPill(
     onClick: () -> Unit,
 ) {
     val t = state.current ?: return
+    // Previous target, used to decide between tweening forward and snapping back.
+    var prev by remember { mutableFloatStateOf(0f) }
     Column(
         Modifier
             .fillMaxWidth()
@@ -127,6 +138,16 @@ fun NowPlayingPill(
         }
         // Progress line hugs the bottom edge of the card, inset so it reads as part of the
         // glass rather than a border.
+        val target = progress.coerceIn(0f, 1f)
+        // Polled in 500ms steps, so the fill is tweened forward instead of jumping; a step back
+        // (new track, seek) snaps rather than sliding backwards.
+        val fill by animateFloatAsState(
+            targetValue = target,
+            animationSpec = if (target >= prev) tween(500, easing = LinearEasing) else snap(),
+            label = "pillProgress",
+        )
+        // Recompose-safe: this only records the value for the next comparison.
+        SideEffect { prev = target }
         Box(
             Modifier
                 .fillMaxWidth()
@@ -139,7 +160,7 @@ fun NowPlayingPill(
             Box(
                 Modifier
                     .fillMaxHeight()
-                    .fillMaxWidth(progress.coerceIn(0f, 1f))
+                    .fillMaxWidth(fill)
                     .clip(RoundedCornerShape(50))
                     .background(MaterialTheme.colorScheme.primary),
             )
@@ -153,9 +174,10 @@ fun Chip(
     label: String,
     active: Boolean,
     onClick: () -> Unit,
+    onRemove: (() -> Unit)? = null,
 ) {
     val scale by animateFloatAsState(if (active) 1f else 0.97f, spring(), label = "chipScale")
-    Box(
+    Row(
         Modifier
             .clip(RoundedCornerShape(50))
             .background(
@@ -163,13 +185,29 @@ fun Chip(
                 else Color.White.copy(alpha = 0.08f),
             )
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 9.dp),
+            .padding(start = 16.dp, end = if (onRemove == null) 16.dp else 6.dp, top = 9.dp, bottom = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             label,
             style = MaterialTheme.typography.labelMedium,
             color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        if (onRemove != null) {
+            Spacer(Modifier.width(2.dp))
+            // 28dp keeps the tap target usable without inflating the chip height.
+            Box(
+                Modifier.size(28.dp).clip(CircleShape).clickable(onClick = onRemove),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Rounded.Close,
+                    contentDescription = "Hapus $label",
+                    modifier = Modifier.size(15.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 }
 

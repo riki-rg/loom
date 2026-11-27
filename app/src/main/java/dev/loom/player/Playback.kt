@@ -28,6 +28,26 @@ object Playback {
 
     fun seek(ms: Long) { controller?.seekTo(ms) }
 
+    /** Relative seek for the -10s / +10s buttons; clamped to the item so it cannot wrap. */
+    fun seekBy(deltaMs: Long) {
+        val c = controller ?: return
+        val target = (c.currentPosition + deltaMs).coerceIn(0L, c.duration.coerceAtLeast(0L))
+        c.seekTo(target)
+    }
+
+    /**
+     * Repeat-one and shuffle belong to the player, not to the ViewModel's end-of-track handler.
+     * Looping here means ExoPlayer never reports STATE_ENDED, so a repeating track cannot stall
+     * on a finished player and then jump when play is pressed again.
+     */
+    fun setRepeat(on: Boolean) {
+        controller?.repeatMode = if (on) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+    }
+
+    fun setShuffle(on: Boolean) {
+        controller?.shuffleModeEnabled = on
+    }
+
     fun attach(ctx: Context, vm: LoomViewModel) {
         val app = ctx.applicationContext
         val token = SessionToken(app, ComponentName(app, PlaybackService::class.java))
@@ -50,9 +70,27 @@ object Playback {
             })
             vm.onPlay = ::play
             vm.onPause = { controller?.pause() }
-            vm.onResume = { controller?.play() }
+            vm.onResume = ::resume
             vm.onEq = { name -> Eq.apply(name) }
+            vm.onRepeat = { Playback.setRepeat(it) }
+            vm.onShuffle = { Playback.setShuffle(it) }
+            // Apply whatever the user had set before this controller was ready.
+            vm.reapplyModes()
         }, ContextCompat.getMainExecutor(app))
+    }
+
+    /**
+     * Play, or restart when the item already finished. A player sitting at STATE_ENDED ignores
+     * `play()`, which is why pressing play on a track that had ended appeared to do nothing and
+     * then jumped forward instead of replaying.
+     */
+    private fun resume() {
+        val c = controller ?: return
+        if (c.playbackState == Player.STATE_ENDED) {
+            c.seekTo(0)
+            c.prepare()
+        }
+        c.play()
     }
 
     private fun play(track: Track, stream: Stream) {

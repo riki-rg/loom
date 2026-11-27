@@ -1,5 +1,12 @@
 package dev.loom.player
 
+import android.os.Bundle
+import androidx.media3.session.CommandButton
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.ListenableFuture
+import dev.loom.R
 import android.content.Context
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
@@ -19,12 +26,67 @@ import androidx.media3.session.MediaSessionService
 private const val UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
+private const val SEEK_BACK = "dev.loom.SEEK_BACK"
+private const val SEEK_FORWARD = "dev.loom.SEEK_FORWARD"
+
 class PlaybackService : MediaSessionService() {
     private var session: MediaSession? = null
 
     override fun onCreate() {
         super.onCreate()
-        session = MediaSession.Builder(this, buildPlayer(this)).build()
+        session = MediaSession.Builder(this, buildPlayer(this))
+            // The notification's -10s/+10s buttons are custom commands, because the standard
+            // media layout only offers prev/play/next. Sent as a relative seek in milliseconds.
+            .setCallback(object : MediaSession.Callback {
+                override fun onConnect(
+                    session: MediaSession,
+                    controller: MediaSession.ControllerInfo,
+                ): MediaSession.ConnectionResult {
+                    val buttons = listOf(
+                        CommandButton.Builder()
+                            .setDisplayName("Mundur 10 detik")
+                            .setIconResId(R.drawable.ic_replay_10)
+                            .setSessionCommand(SessionCommand(SEEK_BACK, Bundle.EMPTY))
+                            .build(),
+                        CommandButton.Builder()
+                            .setDisplayName("Maju 10 detik")
+                            .setIconResId(R.drawable.ic_forward_10)
+                            .setSessionCommand(SessionCommand(SEEK_FORWARD, Bundle.EMPTY))
+                            .build(),
+                    )
+                    val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
+                        .buildUpon()
+                        .addSessionCommands(
+                            listOf(
+                                SessionCommand(SEEK_BACK, Bundle.EMPTY),
+                                SessionCommand(SEEK_FORWARD, Bundle.EMPTY),
+                            ),
+                        )
+                        .build()
+                    return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                        .setAvailableSessionCommands(commands)
+                        .setMediaButtonPreferences(buttons)
+                        .build()
+                }
+
+                override fun onCustomCommand(
+                    session: MediaSession,
+                    controller: MediaSession.ControllerInfo,
+                    customCommand: SessionCommand,
+                    args: Bundle,
+                ): ListenableFuture<SessionResult> {
+                    val p = session.player
+                    val delta = when (customCommand.customAction) {
+                        SEEK_BACK -> -10_000L
+                        SEEK_FORWARD -> 10_000L
+                        else -> return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
+                    }
+                    val target = (p.currentPosition + delta).coerceIn(0L, p.duration.coerceAtLeast(0L))
+                    p.seekTo(target)
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+            })
+            .build()
         // The EQ needs a live audio session id, which only ExoPlayer itself exposes.
         session?.player?.let { p ->
             p.addListener(object : Player.Listener {

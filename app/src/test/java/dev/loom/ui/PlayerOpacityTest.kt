@@ -72,6 +72,7 @@ class PlayerOpacityTest {
                         onToggle = {},
                         onSkip = {},
                         onSeek = {},
+                        onSeekBy = {},
                         onLike = {},
                         onLikeTrack = {},
                         onPlayTrack = {},

@@ -40,6 +40,8 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PlaylistAdd
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Shuffle
+import androidx.compose.material.icons.rounded.Replay10
+import androidx.compose.material.icons.rounded.Forward10
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material3.AlertDialog
@@ -97,6 +99,7 @@ fun NowPlayingSheet(
     onToggle: () -> Unit,
     onSkip: (Int) -> Unit,
     onSeek: (Long) -> Unit,
+    onSeekBy: (Long) -> Unit,
     onLike: () -> Unit,
     onLikeTrack: (Track) -> Unit,
     onPlayTrack: (Track) -> Unit,
@@ -195,6 +198,11 @@ fun NowPlayingSheet(
                 IconButton(onClick = { onSkip(-1) }) {
                     Icon(Icons.Rounded.SkipPrevious, contentDescription = "Previous", modifier = Modifier.size(30.dp))
                 }
+                // -10s / +10s sit beside the transport: seeking by a fixed step is the common
+                // gesture, and dragging the slider for ten seconds is not.
+                IconButton(onClick = { onSeekBy(-10_000) }) {
+                    Icon(Icons.Rounded.Replay10, contentDescription = "Mundur 10 detik", modifier = Modifier.size(28.dp))
+                }
                 Box(
                     Modifier
                         .size(64.dp)
@@ -216,6 +224,9 @@ fun NowPlayingSheet(
                 }
                 IconButton(onClick = { onSkip(1) }) {
                     Icon(Icons.Rounded.SkipNext, contentDescription = "Next", modifier = Modifier.size(30.dp))
+                }
+                IconButton(onClick = { onSeekBy(10_000) }) {
+                    Icon(Icons.Rounded.Forward10, contentDescription = "Maju 10 detik", modifier = Modifier.size(28.dp))
                 }
             }
 

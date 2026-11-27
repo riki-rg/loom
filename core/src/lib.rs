@@ -102,15 +102,27 @@ fn column_text(cols: &[Value], idx: usize) -> String {
         .unwrap_or_default()
 }
 
-/// YouTube list rows hand out `hqdefault`, a 480x360 frame with black letterbox bars; cropped to
-/// a square card it reads as blurry. `maxresdefault` is the same frame at 1280x720 with no bars.
-/// `shortcut:` a rare pre-2010 upload has no maxres and 404s; the UI falls back to the original URL.
+/// Two different thumbnail shapes need upgrading, and the second one was the real culprit:
+/// 1. `i.ytimg.com/vi/<id>/hqdefault.jpg` — 480x360 with black letterbox bars; cropped to a
+///    square card it reads as mush. `maxresdefault` is the same frame at 1280x720, no bars.
+/// 2. `yt3.googleusercontent.com/<hash>=w120-h120-l90-rj` — a 120px thumbnail. Home shelves
+///    hand this out for every card, which is why some covers looked blurry while others did not.
+/// `shortcut:` a rare pre-2010 upload has no maxres and 404s; the UI shows a placeholder then.
 fn hires_art(url: &str) -> String {
     if url.contains("/vi/") && url.contains("hqdefault") {
-        url.replace("hqdefault", "maxresdefault")
-    } else {
-        url.to_string()
+        return url.replace("hqdefault", "maxresdefault");
     }
+    // `...=w120-h120-l90-rj`: replace just the size pair, keep the crop flags after it.
+    if let Some(eq) = url.rfind("=w") {
+        let (head, tail) = url.split_at(eq + 1);
+        let mut parts: Vec<&str> = tail.split('-').collect();
+        if parts.len() >= 2 {
+            parts[0] = "w1000";
+            parts[1] = "h1000";
+            return format!("{}{}", head, parts.join("-"));
+        }
+    }
+    url.to_string()
 }
 
 fn parse_item(r: &Value) -> Option<Value> {
@@ -1284,6 +1296,15 @@ mod tests {
         assert_eq!(
             hires_art("https://i.ytimg.com/vi/abc/hqdefault.jpg?sqp=1"),
             "https://i.ytimg.com/vi/abc/maxresdefault.jpg?sqp=1"
+        );
+        // The 120px size pair is what made home covers blurry; crop flags must survive.
+        assert_eq!(
+            hires_art("https://yt3.googleusercontent.com/abc=w120-h120-l90-rj"),
+            "https://yt3.googleusercontent.com/abc=w1000-h1000-l90-rj"
+        );
+        assert_eq!(
+            hires_art("https://yt3.googleusercontent.com/abc=w544-h544-l90-rj"),
+            "https://yt3.googleusercontent.com/abc=w1000-h1000-l90-rj"
         );
         // Deezer and Spotify urls must pass through untouched.
         assert_eq!(hires_art("https://cdn-images.dzcdn.net/x/1000x1000.jpg"), "https://cdn-images.dzcdn.net/x/1000x1000.jpg");

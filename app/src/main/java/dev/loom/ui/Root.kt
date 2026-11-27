@@ -111,13 +111,16 @@ fun Root(vm: LoomViewModel) {
     val accent2 = MaterialTheme.colorScheme.secondary
     val haze = remember { HazeState() }
 
-    // Media3 has no position callback, so the sheet polls while it is open.
+    // Media3 has no position callback, so the position is polled. This used to run only while the
+    // sheet was open, which froze the pill's progress line until the user expanded it.
     var position by remember { mutableStateOf(0L to 0L) }
-    LaunchedEffect(state.openPlayer, state.lyricsFull, state.current?.id, state.playing) {
-        while (state.openPlayer || state.lyricsFull) {
+    LaunchedEffect(state.current?.id, state.playing, state.openPlayer, state.lyricsFull) {
+        while (state.current != null && (state.playing || state.openPlayer || state.lyricsFull)) {
             position = Playback.position()
             kotlinx.coroutines.delay(500)
         }
+        // Paused with everything closed: one last read so the line lands where playback stopped.
+        position = Playback.position()
     }
 
     // Opening the sheet is also when lyrics are worth fetching.
@@ -182,6 +185,8 @@ fun Root(vm: LoomViewModel) {
                             vm::playQuery,
                             { t -> vm.play(t) },
                             vm::toggleLike,
+                            vm::removeQuery,
+                            vm::clearQueries,
                         )
                         Tab.SETTINGS -> SettingsScreen(vm, theme)
                     }
@@ -240,6 +245,7 @@ fun Root(vm: LoomViewModel) {
                 onToggle = vm::togglePlay,
                 onSkip = vm::skip,
                 onSeek = { Playback.seek(it) },
+                onSeekBy = { Playback.seekBy(it) },
                 onLike = { state.current?.let { vm.toggleLike(it) } },
                 onLikeTrack = { vm.toggleLike(it) },
                 onPlayTrack = { vm.play(it, state.queue) },
@@ -428,7 +434,7 @@ private fun QueueScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(Lib.entries) { l -> Chip(l.label, l == state.lib) { onLib(l) } }
+                items(Lib.entries) { l -> Chip(l.label, l == state.lib, onClick = { onLib(l) }) }
             }
         }
         item { Spacer(Modifier.height(16.dp)) }
@@ -517,7 +523,7 @@ private fun QueueScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Music.importable.forEach { s ->
-                            Chip(s.label, s == importState.source) { onImportSource(s) }
+                            Chip(s.label, s == importState.source, onClick = { onImportSource(s) })
                         }
                     }
                     Spacer(Modifier.height(14.dp))
@@ -1099,6 +1105,8 @@ private fun SearchScreen(
     onPlayQuery: (String) -> Unit,
     onPlay: (Track) -> Unit,
     onLike: (Track) -> Unit,
+    onRemoveQuery: (String) -> Unit,
+    onClearQueries: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
         BrandHeader("Search", "All sources at once")
@@ -1125,25 +1133,37 @@ private fun SearchScreen(
             // Empty box: recent queries first, then what was played last.
             !state.searched -> LazyColumn(contentPadding = PaddingValues(bottom = 190.dp)) {
                 if (state.queries.isNotEmpty()) {
-                    item { SectionTitle("Recent searches", modifier = Modifier.padding(start = 4.dp)) }
+                    item {
+                        Row(
+                            Modifier.fillMaxWidth().padding(start = 4.dp, end = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            SectionTitle("Recent searches", modifier = Modifier.weight(1f))
+                            TextButton(onClick = onClearQueries) {
+                                Text("Hapus semua", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                    }
                     item {
                         FlowRow(
                             Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            state.queries.forEach { q -> Chip(q, false) { onPlayQuery(q) } }
+                            state.queries.forEach { q ->
+                                Chip(q, false, onClick = { onPlayQuery(q) }, onRemove = { onRemoveQuery(q) })
+                            }
                         }
                     }
                     item { Spacer(Modifier.height(18.dp)) }
                 }
-                if (state.history.isNotEmpty()) {
-                    item { SectionTitle("Recently played", state.history.size) }
-                    items(state.history.take(12), key = { "h" + it.source.name + it.id }) { t ->
+                if (state.searchPlayed.isNotEmpty()) {
+                    item { SectionTitle("Recently played", state.searchPlayed.size) }
+                    items(state.searchPlayed, key = { "sp" + it.source.name + it.id }) { t ->
                         TrackRow(t, selected = state.current?.id == t.id, onLike = { onLike(t) }) { onPlay(t) }
                     }
                 }
-                if (state.queries.isEmpty() && state.history.isEmpty()) {
+                if (state.queries.isEmpty() && state.searchPlayed.isEmpty()) {
                     item { EmptyState("Search to start", "Type a song, artist or album. All three sources answer at once.") }
                 }
             }
@@ -1188,9 +1208,9 @@ private fun SettingsScreen(vm: LoomViewModel, theme: ThemeState) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Mode.entries.forEach { m ->
-                    Chip(m.name.lowercase().replaceFirstChar { it.uppercase() }, theme.mode == m) {
+                    Chip(m.name.lowercase().replaceFirstChar { it.uppercase() }, theme.mode == m, onClick = {
                         vm.setMode(m)
-                    }
+                    })
                 }
             }
         }

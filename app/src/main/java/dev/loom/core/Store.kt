@@ -71,9 +71,30 @@ class Store(ctx: Context) {
         p.edit().putString("queries", JSONArray((listOf(q) + queries.filter { it != q }).take(12)).toString()).apply()
     }
 
+    fun removeQuery(q: String) {
+        p.edit().putString("queries", JSONArray(queries.filter { it != q }).toString()).apply()
+    }
+
+    fun clearQueries() {
+        p.edit().remove("queries").apply()
+    }
+
     /** Newest first, no duplicate of the same track from the same source. */
     fun addHistory(t: Track) {
         history = listOf(t) + history.filterNot { it.id == t.id && it.source == t.source }
+    }
+
+    /**
+     * Tracks the user picked themselves from the Search tab. Kept apart from `history` so the
+     * Search screen stops mirroring the library: autoplay must not grow this list, and it must
+     * not clear when a track simply ends.
+     */
+    var searchPlayed: List<Track>
+        get() = readTracks("search_played")
+        private set(v) = write("search_played", v.take(12).map { it.toJson() })
+
+    fun addSearchPlayed(t: Track) {
+        searchPlayed = listOf(t) + searchPlayed.filterNot { it.id == t.id && it.source == t.source }
     }
 
     fun toggleLike(t: Track): Boolean {

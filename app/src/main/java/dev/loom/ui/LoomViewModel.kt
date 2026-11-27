@@ -60,6 +60,8 @@ data class UiState(
     val saved: List<Collection> = emptyList(),
     val weekly: List<Track> = emptyList(),
     val queries: List<String> = emptyList(),
+    /** Tracks the user picked from Search; separate from `history`, which is everything played. */
+    val searchPlayed: List<Track> = emptyList(),
     val lib: Lib = Lib.PLAYLISTS,
     val playlists: List<dev.loom.core.NamedPlaylist> = emptyList(),
     val lyrics: String? = null,
@@ -112,12 +114,17 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
     /** Wired by Playback; applies an equalizer preset to the live audio session. */
     var onEq: ((String) -> Unit)? = null
 
+    /** Wired by Playback; ExoPlayer owns repeat and shuffle so it can loop without ending. */
+    var onRepeat: ((Boolean) -> Unit)? = null
+    var onShuffle: ((Boolean) -> Unit)? = null
+
     init {
         _state.value = _state.value.copy(
             history = store.history,
             liked = store.liked,
             saved = store.saved,
             queries = store.queries,
+            searchPlayed = store.searchPlayed,
             playlists = store.playlists,
             // Restored but paused: the card is there, the audio is not.
             queue = store.queue,
@@ -294,6 +301,16 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
         search()
     }
 
+    fun removeQuery(q: String) {
+        store.removeQuery(q)
+        _state.value = _state.value.copy(queries = store.queries)
+    }
+
+    fun clearQueries() {
+        store.clearQueries()
+        _state.value = _state.value.copy(queries = emptyList())
+    }
+
     /** Track whose three-dot sheet is open, or null. */
     private val _menuTrack = MutableStateFlow<Track?>(null)
     val menuTrack: StateFlow<Track?> = _menuTrack.asStateFlow()
@@ -342,7 +359,12 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
         search()
     }
 
-    fun play(track: Track, queue: List<Track> = _state.value.results) {
+    /**
+     * `byUser` is true only when the user picked this track themselves (a tap, or their own
+     * next/previous). Autoplay advances with it false, which is what keeps Search's "recently
+     * played" from filling up with tracks nobody chose.
+     */
+    fun play(track: Track, queue: List<Track> = _state.value.results, byUser: Boolean = true) {
         // Playing a single track always appends to the live queue instead of replacing it,
         // so tapping one song from search never throws away what is already lined up.
         val target = if (queue.size <= 1 && _state.value.queue.isNotEmpty()) {
@@ -351,6 +373,8 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
             else existing + track
         } else queue
         val idx = target.indexOf(track).coerceAtLeast(0)
+        // Captured now: the resolve below is async and the user may switch tabs meanwhile.
+        val fromSearch = _state.value.tab == Tab.SEARCH
         _state.value = _state.value.copy(queue = target, index = idx, resolving = true, error = null)
         store.saveQueue(target, idx)
         viewModelScope.launch {
@@ -358,10 +382,12 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
             stream.fold(
                 onSuccess = {
                     store.addHistory(track)
+                    if (byUser && fromSearch) store.addSearchPlayed(track)
                     _state.value = _state.value.copy(
                         resolving = false,
                         playing = true,
                         history = store.history,
+                        searchPlayed = store.searchPlayed,
                     )
                     onPlay?.invoke(track, it)
                 },
@@ -528,44 +554,57 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun toggleShuffle() { _state.value = _state.value.copy(shuffle = !_state.value.shuffle) }
+    /**
+     * Repeat and shuffle are delegated to ExoPlayer. Handling them in `onTrackEnded` meant the
+     * player itself sat at STATE_ENDED, so the track stopped and the next play press moved on.
+     */
+    fun toggleShuffle() {
+        val on = !_state.value.shuffle
+        _state.value = _state.value.copy(shuffle = on)
+        onShuffle?.invoke(on)
+    }
 
-    /** Repeat replays the same track on end instead of advancing. */
-    fun toggleRepeat() { _state.value = _state.value.copy(repeat = !_state.value.repeat) }
+    fun toggleRepeat() {
+        val on = !_state.value.repeat
+        _state.value = _state.value.copy(repeat = on)
+        onRepeat?.invoke(on)
+    }
+
+    /** Push the stored repeat/shuffle state into a freshly created player. */
+    fun reapplyModes() {
+        onRepeat?.invoke(_state.value.repeat)
+        onShuffle?.invoke(_state.value.shuffle)
+    }
 
     fun togglePlay() {
         val s = _state.value
         if (s.current == null) return
         if (s.playing) { onPause?.invoke(); _state.value = s.copy(playing = false) }
-        else { onResume?.invoke(); _state.value = s.copy(playing = true) }
+        else {
+            // A finished player ignores play(); restart it instead of silently doing nothing.
+            onResume?.invoke()
+            _state.value = s.copy(playing = true)
+        }
     }
 
-    fun skip(delta: Int) {
+    /** `byUser` false when the player advanced on its own rather than a button press. */
+    fun skip(delta: Int, byUser: Boolean = true) {
         val s = _state.value
         if (s.queue.isEmpty()) return
         val next = (s.index + delta + s.queue.size) % s.queue.size
         _state.value = s.copy(index = next)
         store.saveQueue(s.queue, next)
-        play(s.queue[next], s.queue)
+        play(s.queue[next], s.queue, byUser)
     }
 
     /** Player reached the end of an item: advance, or grow the queue when it runs out. */
     fun onTrackEnded() {
         val s = _state.value
         if (s.queue.isEmpty()) return
-        if (s.repeat) {
-            play(s.queue[s.index], s.queue)
-            return
-        }
-        if (s.shuffle && s.queue.size > 1) {
-            // Never repeat the track that just ended.
-            val next = s.queue.indices.filter { it != s.index }.random()
-            _state.value = s.copy(index = next)
-            play(s.queue[next], s.queue)
-            return
-        }
+        // Repeat and shuffle never reach here: ExoPlayer handles them itself, so a repeating
+        // track loops without the player ever reporting STATE_ENDED.
         if (s.index < s.queue.lastIndex) {
-            skip(1)
+            skip(1, byUser = false)
         } else {
             extendQueue()
         }
@@ -595,7 +634,7 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
             val grown = _state.value.queue + fresh
             _state.value = _state.value.copy(queue = grown, resolving = false)
             store.saveQueue(grown, _state.value.index + 1)
-            play(grown[_state.value.index + 1], grown)
+            play(grown[_state.value.index + 1], grown, byUser = false)
         }
     }
 

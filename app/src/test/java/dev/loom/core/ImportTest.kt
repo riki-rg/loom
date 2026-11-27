@@ -102,6 +102,42 @@ class ImportTest {
         assertTrue(store.playlists.none { it.name == "Latihan Baru" })
     }
 
+    /** Search history: add is newest-first and deduped, remove drops one, clear drops all. */
+    @Test
+    fun searchHistoryIsManageable() {
+        val store = Store(app)
+        store.clearQueries()
+        store.addQuery("tulus")
+        store.addQuery("denny caknan")
+        store.addQuery("tulus")
+        // Re-searching an old term moves it to the front instead of duplicating.
+        assertEquals(listOf("tulus", "denny caknan"), store.queries)
+
+        store.removeQuery("tulus")
+        assertEquals(listOf("denny caknan"), store.queries)
+
+        store.clearQueries()
+        assertTrue(store.queries.isEmpty())
+    }
+
+    /** Search's own list: newest first, deduped, and independent of the global history. */
+    @Test
+    fun searchPlayedIsSeparateFromHistory() {
+        val store = Store(app)
+        val a = Track("yt1", "Teh Hijau", "Tulus", "", Source.YT_MUSIC, 1000)
+        val b = Track("yt2", "Negoro Angin", "Denny Caknan", "", Source.YT_MUSIC, 1000)
+
+        store.addSearchPlayed(a)
+        store.addSearchPlayed(b)
+        store.addSearchPlayed(a)
+        assertEquals(listOf("yt1", "yt2"), store.searchPlayed.map { it.id })
+
+        // History is a different list: writing one must not write the other.
+        store.addHistory(b)
+        assertEquals(listOf("yt2"), store.history.map { it.id })
+        assertEquals(listOf("yt1", "yt2"), store.searchPlayed.map { it.id })
+    }
+
     @Test
     fun bulkAddToMissingPlaylistIsANoOp() {
         assertEquals(0, Store(app).addAllToPlaylist("nope", listOf(track("1"))))
