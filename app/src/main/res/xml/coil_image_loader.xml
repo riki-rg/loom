@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<coil.ImageLoader>
-    <crossfade>120</crossfade>
-    <allowHardware>true</allowHardware>
-    <bitmapConfig>RGB_565</bitmapConfig>
-    <memoryCachePolicy>ENABLED</memoryCachePolicy>
-    <diskCachePolicy>ENABLED</diskCachePolicy>
-    <respectCacheHeaders>false</respectCacheHeaders>
-</coil.ImageLoader>
