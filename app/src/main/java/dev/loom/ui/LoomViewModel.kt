@@ -74,7 +74,11 @@ data class UiState(
     val loading: Boolean = false,
     val error: String? = null,
     val shelves: List<Shelf> = emptyList(),
+    /** Flat track rows for the home screen; shelves alone read as a wall of cards. */
+    val topTracks: List<Track> = emptyList(),
     val forYou: List<Shelf> = emptyList(),
+    /** Radio seeded from the user's own history; the personal half of For You. */
+    val forYouTracks: List<Track> = emptyList(),
     /** Keyed by tab: a detail page opened from For You must not appear on Home. */
     val openPlaylist: Map<Tab, OpenPlaylist> = emptyMap(),
     val queue: List<Track> = emptyList(),
@@ -144,9 +148,17 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
         if (_state.value.loading) return
         _state.value = _state.value.copy(loading = true, error = null)
         viewModelScope.launch {
-            val res = withContext(Dispatchers.IO) { runCatching { Music.home() } }
+            // Shelves and track rows are independent; fetch them together so the screen does not
+            // render in two visible passes.
+            val res = withContext(Dispatchers.IO) {
+                val shelves = runCatching { Music.home() }
+                val top = runCatching { Music.homeTop() }.getOrDefault(emptyList())
+                shelves.map { it to top }
+            }
             _state.value = res.fold(
-                onSuccess = { _state.value.copy(shelves = it, loading = false) },
+                onSuccess = { (shelves, top) ->
+                    _state.value.copy(shelves = shelves, topTracks = top, loading = false)
+                },
                 onFailure = { _state.value.copy(loading = false, error = "Could not load home: " + it.short()) },
             )
         }
@@ -154,8 +166,17 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
 
     fun loadForYou() {
         viewModelScope.launch {
-            val res = withContext(Dispatchers.IO) { runCatching { Music.forYou() } }
-            res.onSuccess { _state.value = _state.value.copy(forYou = it) }
+            // Personal first: seed radio from the tracks actually played, then fall back to the
+            // generic Explore page when there is no history yet.
+            val res = withContext(Dispatchers.IO) {
+                val seeds = store.history.distinctBy { it.artist }.take(4)
+                val personalised = seeds.map { seed ->
+                    async { runCatching { Music.radio(seed) }.getOrDefault(emptyList()) }
+                }.awaitAll().flatten().distinctBy { it.id }
+                personalised to runCatching { Music.forYou() }.getOrDefault(emptyList())
+            }
+            val (mine, generic) = res
+            _state.value = _state.value.copy(forYouTracks = mine, forYou = generic)
         }
     }
 
@@ -268,6 +289,54 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
 
     fun playQuery(q: String) {
         _state.value = _state.value.copy(query = q)
+        search()
+    }
+
+    /** Track whose three-dot sheet is open, or null. */
+    private val _menuTrack = MutableStateFlow<Track?>(null)
+    val menuTrack: StateFlow<Track?> = _menuTrack.asStateFlow()
+
+    fun openMenu(t: Track) { _menuTrack.value = t }
+    fun closeMenu() { _menuTrack.value = null }
+
+    /** Insert after the current track, keeping the rest of the queue intact. */
+    fun playNext(track: Track) {
+        val s = _state.value
+        val q = s.queue.toMutableList()
+        if (s.index in q.indices) q.add(s.index + 1, track) else q.add(track)
+        _state.value = s.copy(queue = q)
+        store.saveQueue(q, s.index)
+        _menuTrack.value = null
+    }
+
+    /** Append to the end without changing what is playing. */
+    fun enqueue(track: Track) {
+        val s = _state.value
+        val q = s.queue + track
+        _state.value = s.copy(queue = q)
+        store.saveQueue(q, s.index)
+        _menuTrack.value = null
+    }
+
+    fun saveToPlaylist(name: String, track: Track) {
+        store.addToPlaylist(name, track)
+        _state.value = _state.value.copy(playlists = store.playlists)
+        _menuTrack.value = null
+    }
+
+    /** Share a link the receiving app can open; every source has a canonical URL. */
+    fun shareLink(track: Track): String = when (track.source) {
+        Source.YT_MUSIC -> "https://music.youtube.com/watch?v=${track.id}"
+        Source.SPOTIFY -> "https://open.spotify.com/track/${track.id}"
+        Source.DEEZER -> "https://www.deezer.com/track/${track.id}"
+        Source.SOUNDCLOUD -> "https://soundcloud.com/tracks/${track.id}"
+    }
+
+    /** Open the artist by searching the name; no artist-id plumbing needed. */
+    fun openArtist(track: Track) {
+        _menuTrack.value = null
+        if (track.artist.isBlank()) return
+        _state.value = _state.value.copy(tab = Tab.SEARCH, query = track.artist)
         search()
     }
 

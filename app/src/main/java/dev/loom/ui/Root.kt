@@ -1,6 +1,12 @@
 package dev.loom.ui
 
 import androidx.activity.compose.BackHandler
+import android.content.Intent
+import coil.compose.AsyncImage
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.background
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.animateFloat
@@ -26,6 +32,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -48,6 +55,16 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.tween
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.PlaylistPlay
+import androidx.compose.material.icons.rounded.QueueMusic
+import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.PlaylistAdd
+import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
@@ -120,8 +137,8 @@ fun Root(vm: LoomViewModel) {
                     PlaylistDetail(open.title, state, vm::closePlaylist, vm::play, vm::toggleLike)
                 } else {
                     when (state.tab) {
-                        Tab.HOME -> HomeScreen(state, vm::openCollection)
-                        Tab.FOR_YOU -> ForYouScreen(state, vm::openCollection)
+                        Tab.HOME -> HomeScreen(state, vm::openCollection, vm::play, vm::toggleLike, vm::openMenu)
+                        Tab.FOR_YOU -> ForYouScreen(state, vm::openCollection, vm::play, vm::toggleLike, vm::openMenu)
                         Tab.PLAYLIST -> {
                             val imp by vm.importing.collectAsState()
                             QueueScreen(
@@ -216,6 +233,31 @@ fun Root(vm: LoomViewModel) {
             )
         }
 
+        // Track actions, opened from any three-dot button.
+        val menu by vm.menuTrack.collectAsState()
+        menu?.let { t ->
+            val ctx = LocalContext.current
+            TrackActionsSheet(
+                track = t,
+                liked = vm.isLiked(t),
+                playlists = state.playlists.map { it.name },
+                onDismiss = vm::closeMenu,
+                onPlayNext = { vm.playNext(t) },
+                onQueue = { vm.enqueue(t) },
+                onLike = { vm.toggleLike(t); vm.closeMenu() },
+                onSaveTo = { name -> vm.saveToPlaylist(name, t) },
+                onShare = {
+                    val i = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, vm.shareLink(t))
+                    }
+                    ctx.startActivity(Intent.createChooser(i, "Bagikan"))
+                    vm.closeMenu()
+                },
+                onArtist = { vm.openArtist(t) },
+            )
+        }
+
         // Lyrics get their own page, above the player, with the same back behaviour.
         AnimatedVisibility(
             visible = state.lyricsFull,
@@ -240,25 +282,72 @@ fun Root(vm: LoomViewModel) {
 }
 
 @Composable
-private fun HomeScreen(state: UiState, onOpen: (Collection) -> Unit) {
+private fun HomeScreen(
+    state: UiState,
+    onOpen: (Collection) -> Unit,
+    onPlay: (Track, List<Track>) -> Unit,
+    onLike: (Track) -> Unit,
+    onMenu: (Track) -> Unit,
+) {
     when {
         state.loading && state.shelves.isEmpty() -> CenterSpinner()
-        state.shelves.isEmpty() -> EmptyState("Nothing to show", "Could not reach YouTube Music.")
+        state.shelves.isEmpty() && state.topTracks.isEmpty() ->
+            EmptyState("Nothing to show", "Could not reach YouTube Music.")
         else -> LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 190.dp)) {
             item { BrandHeader("Loom", "Home") }
+            // Tracks before cards: the first screen should be playable, not a wall of covers.
+            if (state.topTracks.isNotEmpty()) {
+                item {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Mix lagu", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { onPlay(state.topTracks.first(), state.topTracks) }) {
+                            Text("Putar semua")
+                        }
+                    }
+                }
+                itemsIndexed(state.topTracks, key = { _, t -> "ht" + t.id }) { i, t ->
+                    NumberedTrackRow(i + 1, t, state.current?.id == t.id, onPlay = { onPlay(t, state.topTracks) }, onLike = { onLike(t) }, onMenu = { onMenu(t) })
+                }
+            }
             items(state.shelves, key = { "hs" + it.title }) { shelf -> ShelfRow(shelf.title, shelf.items, onOpen) }
         }
     }
 }
 
 @Composable
-private fun ForYouScreen(state: UiState, onOpen: (Collection) -> Unit) {
-    if (state.forYou.isEmpty()) {
+private fun ForYouScreen(
+    state: UiState,
+    onOpen: (Collection) -> Unit,
+    onPlay: (Track, List<Track>) -> Unit,
+    onLike: (Track) -> Unit,
+    onMenu: (Track) -> Unit,
+) {
+    if (state.forYou.isEmpty() && state.forYouTracks.isEmpty()) {
         CenterSpinner()
         return
     }
     LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 190.dp)) {
-        item { BrandHeader("For You", "New releases, charts and videos") }
+        item { BrandHeader("For You", "Built from what you listen to") }
+        // Personal rows lead: they are the reason this tab exists.
+        if (state.forYouTracks.isNotEmpty()) {
+            item {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("For you today", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { onPlay(state.forYouTracks.first(), state.forYouTracks) }) {
+                        Text("Putar semua")
+                    }
+                }
+            }
+            itemsIndexed(state.forYouTracks, key = { _, t -> "fy" + t.id }) { i, t ->
+                NumberedTrackRow(i + 1, t, state.current?.id == t.id, onPlay = { onPlay(t, state.forYouTracks) }, onLike = { onLike(t) }, onMenu = { onMenu(t) })
+            }
+        }
         items(state.forYou, key = { "fs" + it.title }) { shelf -> ShelfRow(shelf.title, shelf.items, onOpen) }
     }
 }
@@ -554,6 +643,200 @@ fun TrackSkeleton() {
                 }
             }
         }
+    }
+}
+
+/** A track row with a rank number and a three-dot menu, for the playable lists on Home/For You. */
+@Composable
+fun NumberedTrackRow(
+    rank: Int,
+    t: Track,
+    selected: Boolean,
+    onPlay: () -> Unit,
+    onLike: () -> Unit,
+    onMenu: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onPlay)
+            .padding(start = 6.dp, end = 2.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "$rank",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.width(22.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        AsyncImage(
+            model = t.art,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.size(52.dp).clip(RoundedCornerShape(12.dp)),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                t.title,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                listOfNotNull(t.artist.takeIf { it.isNotBlank() }, t.source.label).joinToString(" · "),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        IconButton(onClick = onLike, modifier = Modifier.size(38.dp)) {
+            Icon(
+                Icons.Rounded.FavoriteBorder,
+                contentDescription = "Like",
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        IconButton(onClick = onMenu, modifier = Modifier.size(38.dp)) {
+            Icon(
+                Icons.Rounded.MoreVert,
+                contentDescription = "More",
+                modifier = Modifier.size(19.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * Track actions. Covers what the app can actually do — play next, queue, save to a playlist,
+ * like, share, open the artist — instead of mirroring YouTube's menu, whose Download and
+ * Credits rows would be dead ends here.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun TrackActionsSheet(
+    track: Track,
+    liked: Boolean,
+    playlists: List<String>,
+    onDismiss: () -> Unit,
+    onPlayNext: () -> Unit,
+    onQueue: () -> Unit,
+    onLike: () -> Unit,
+    onSaveTo: (String) -> Unit,
+    onShare: () -> Unit,
+    onArtist: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface) {
+        TrackActionsBody(track, liked, playlists, onDismiss, onPlayNext, onQueue, onLike, onSaveTo, onShare, onArtist)
+    }
+}
+
+/** Sheet contents without the sheet chrome, so it can be rendered in a test without a window. */
+@Composable
+fun TrackActionsBody(
+    track: Track,
+    liked: Boolean,
+    playlists: List<String>,
+    onDismiss: () -> Unit,
+    onPlayNext: () -> Unit,
+    onQueue: () -> Unit,
+    onLike: () -> Unit,
+    onSaveTo: (String) -> Unit,
+    onShare: () -> Unit,
+    onArtist: () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                AsyncImage(
+                    model = track.art,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(56.dp).clip(RoundedCornerShape(12.dp)),
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(track.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        track.artist.ifBlank { track.source.label },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                IconButton(onClick = onDismiss) { Icon(Icons.Rounded.Close, contentDescription = "Close") }
+            }
+            Spacer(Modifier.height(8.dp))
+            // Weighted, not fixed width: three 104dp tiles overflow a 300dp phone.
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+                ActionTile("Putar setelah ini", Icons.Rounded.PlaylistPlay, onPlayNext, Modifier.weight(1f))
+                ActionTile("Tambahkan ke antrean", Icons.Rounded.QueueMusic, onQueue, Modifier.weight(1f))
+                ActionTile("Bagikan", Icons.Rounded.Share, onShare, Modifier.weight(1f))
+            }
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            SheetRow(if (liked) "Hapus dari suka" else "Suka", Icons.Rounded.FavoriteBorder, onLike)
+            if (playlists.isEmpty()) {
+                SheetRow("Simpan ke playlist", Icons.Rounded.PlaylistAdd, null)
+            } else {
+                playlists.forEach { name ->
+                    SheetRow("Simpan ke $name", Icons.Rounded.PlaylistAdd) { onSaveTo(name) }
+                }
+            }
+            SheetRow("Buka halaman artis", Icons.Rounded.Person) { onArtist() }
+        }
+}
+
+@Composable
+private fun ActionTile(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier.clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick).padding(vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+        Spacer(Modifier.height(6.dp))
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
+        )
+    }
+}
+
+@Composable
+private fun SheetRow(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: (() -> Unit)?) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 20.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            modifier = Modifier.size(21.dp),
+            tint = if (onClick != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+        )
+        Spacer(Modifier.width(16.dp))
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (onClick != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+        )
     }
 }
 

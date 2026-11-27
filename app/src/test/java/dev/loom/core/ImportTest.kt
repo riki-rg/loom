@@ -2,6 +2,7 @@ package dev.loom.core
 
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -11,8 +12,8 @@ import org.robolectric.annotation.Config
 
 /**
  * Import plumbing that can be checked without the network: the provider mapping and the bulk
- * store write. The network side is covered by `core`'s ignored live test, which hit all three
- * providers for real.
+ * store write. The network side is covered by `core`'s ignored live tests, which hit every
+ * reachable provider for real.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -37,6 +38,28 @@ class ImportTest {
         assertEquals("ytm", Music.providerKey(Source.YT_MUSIC))
         assertEquals("deezer", Music.providerKey(Source.DEEZER))
         assertEquals("soundcloud", Music.providerKey(Source.SOUNDCLOUD))
+    }
+
+    /**
+     * The import payload is `{name, tracks:[…]}` inside the `{ok,data}` envelope. Reading it must
+     * not go through `unwrap()` on the inner array: that parses the text as a JSONObject and
+     * throws, which is exactly how the reported "Value [{…}]" error happened.
+     */
+    @Test
+    fun importPayloadParsesTracksAndName() {
+        val payload = JSONObject(
+            """
+            {"ok":true,"data":{"name":"Banda Neira","tracks":[
+              {"id":"abc","title":"Bertaut","artist":"Nadin Amizah","art":"","duration":200000},
+              {"id":"def","title":"Senja","artist":"Kunto Aji","art":"","duration":180000}
+            ]}}
+            """.trimIndent(),
+        )
+        val data = payload.getJSONObject("data")
+        assertEquals("Banda Neira", data.getString("name"))
+        val arr = data.getJSONArray("tracks")
+        assertEquals(2, arr.length())
+        assertEquals("Bertaut", arr.getJSONObject(0).getString("title"))
     }
 
     @Test

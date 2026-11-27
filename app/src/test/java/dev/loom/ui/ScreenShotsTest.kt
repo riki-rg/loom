@@ -7,6 +7,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.layout.Row
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -132,6 +137,42 @@ class ScreenShotsTest {
             )
             TrackSkeleton()
         }
+    }
+
+    /** Home with ranked track rows before the card shelves. */
+    @Test
+    fun homeWithTrackRows() = shoot("home-tracks") {
+        val rows = List(6) { i ->
+            Track("v$i", "Lagu Contoh ${i + 1}", "Artis ${i + 1}", "", Source.YT_MUSIC, 200_000)
+        }
+        LazyColumn(Modifier.fillMaxSize().padding(top = 20.dp)) {
+            item {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Mix lagu", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
+                    Text("Putar semua", color = MaterialTheme.colorScheme.primary)
+                }
+            }
+            itemsIndexed(rows) { i, t ->
+                NumberedTrackRow(i + 1, t, false, onPlay = {}, onLike = {}, onMenu = {})
+            }
+        }
+    }
+
+    /** The three-dot action sheet. */
+    @Test
+    fun trackActionsSheet() = shoot("actions-sheet") {
+        TrackActionsBody(
+            track = Track("v1", "Negoro Angin", "Denny Caknan", "", Source.YT_MUSIC, 200_000),
+            liked = false,
+            playlists = listOf("Favorit", "Nostalgia"),
+            onDismiss = {},
+            onPlayNext = {},
+            onQueue = {},
+            onLike = {},
+            onSaveTo = {},
+            onShare = {},
+            onArtist = {},
+        )
     }
 
     /** The default theme must actually be light: a light surface with a blue accent. */

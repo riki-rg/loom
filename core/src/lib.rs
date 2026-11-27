@@ -216,6 +216,25 @@ fn yt_home() -> Result<Value, String> {
     Ok(json!(shelves))
 }
 
+/// A flat list of playable tracks for the home screen. `FEmusic_home` only carries cards, so the
+/// rows come from the first charts playlist ("Trending 20 …"), which is a real track list.
+fn yt_top_tracks() -> Result<Value, String> {
+    let charts = yt_browse("FEmusic_charts", None)?;
+    let mut cards = Vec::new();
+    find_key(&charts, "musicTwoRowItemRenderer", &mut cards);
+    let playlist = cards
+        .iter()
+        .filter_map(|c| c.pointer("/navigationEndpoint/browseEndpoint/browseId"))
+        .filter_map(|b| b.as_str())
+        .find(|b| b.starts_with("VL"))
+        .ok_or("charts: no playlist")?
+        .to_string();
+    let res = yt_browse(&playlist, None)?;
+    let mut out = Vec::new();
+    collect_items(&res, &mut out);
+    Ok(json!(out))
+}
+
 fn collect_shelves(v: &Value, out: &mut Vec<Value>) {
     match v {
         Value::Object(map) => {
@@ -1142,7 +1161,7 @@ pub extern "system" fn Java_dev_loom_core_Core_resolveDeezer(
     run(&mut env, || dz_preview(&id))
 }
 
-/// `provider` picks the importer: "yt", "ytm", "spotify" or "deezer".
+/// `provider` picks the importer: "yt", "ytm", "spotify", "deezer" or "soundcloud".
 #[no_mangle]
 pub extern "system" fn Java_dev_loom_core_Core_importPlaylist(
     mut env: JNIEnv, _c: JClass, provider: JString, input: JString,
@@ -1161,6 +1180,11 @@ pub extern "system" fn Java_dev_loom_core_Core_importPlaylist(
 #[no_mangle]
 pub extern "system" fn Java_dev_loom_core_Core_ytHome(mut env: JNIEnv, _c: JClass) -> jstring {
     run(&mut env, yt_home)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_loom_core_Core_ytTopTracks(mut env: JNIEnv, _c: JClass) -> jstring {
+    run(&mut env, yt_top_tracks)
 }
 
 #[no_mangle]
@@ -1230,6 +1254,15 @@ mod tests {
         assert_eq!(yt_playlist_title(&detail), "Chill Mix");
         assert_eq!(yt_playlist_title(&json!({"c":{}})), "");
         assert_eq!(text_of(&json!({"runs":[{"text":"x"}]})), "x");
+    }
+
+    #[test]
+    #[ignore]
+    fn live_top_tracks() {
+        let v = yt_top_tracks().expect("top tracks");
+        let a = v.as_array().unwrap();
+        println!("top tracks: {} first: {}", a.len(), a[0]);
+        assert!(!a.is_empty());
     }
 
     #[test]

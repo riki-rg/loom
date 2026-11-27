@@ -22,6 +22,7 @@ object Core {
     /** provider: "yt", "spotify" or "deezer"; input may be a URL, share link or bare id. */
     @JvmStatic external fun importPlaylist(provider: String, input: String): String
     @JvmStatic external fun ytHome(): String
+    @JvmStatic external fun ytTopTracks(): String
     @JvmStatic external fun ytForYou(): String
     @JvmStatic external fun ytRadio(id: String): String
     @JvmStatic external fun ytPlaylist(id: String, params: String): String
@@ -68,9 +69,8 @@ private fun unwrap(raw: String): Any {
     return o.get("data")
 }
 
-private fun parseTracks(raw: String, source: Source): List<Track> {
-    val arr = unwrap(raw) as JSONArray
-    return (0 until arr.length()).map { i ->
+private fun tracksOf(arr: JSONArray, source: Source): List<Track> =
+    (0 until arr.length()).map { i ->
         val o = arr.getJSONObject(i)
         Track(
             id = o.optString("id"),
@@ -81,7 +81,9 @@ private fun parseTracks(raw: String, source: Source): List<Track> {
             durationMs = o.optLong("duration"),
         )
     }
-}
+
+private fun parseTracks(raw: String, source: Source): List<Track> =
+    tracksOf(unwrap(raw) as JSONArray, source)
 
 private fun parseCollections(raw: String): List<Collection> =
     collectionsOf(unwrap(raw) as JSONArray)
@@ -140,7 +142,7 @@ object Music {
     fun importPlaylist(source: Source, input: String): Imported {
         val provider = providerKey(source)
         val o = unwrap(Core.importPlaylist(provider, input)) as JSONObject
-        val tracks = parseTracks(o.getJSONArray("tracks").toString(), source)
+        val tracks = tracksOf(o.getJSONArray("tracks"), source)
         if (tracks.isEmpty()) throw CoreException("that playlist has no tracks")
         return Imported(o.optString("name").trim(), tracks)
     }
@@ -201,6 +203,8 @@ object Music {
         } ?: emptyList()
         return text to synced
     }
+
+    fun homeTop(): List<Track> = parseTracks(Core.ytTopTracks(), Source.YT_MUSIC)
 
     /** Autoplay queue: same artist and genre, seeded by the track that just finished. */
     fun radio(track: Track): List<Track> =
