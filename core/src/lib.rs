@@ -102,6 +102,17 @@ fn column_text(cols: &[Value], idx: usize) -> String {
         .unwrap_or_default()
 }
 
+/// YouTube list rows hand out `hqdefault`, a 480x360 frame with black letterbox bars; cropped to
+/// a square card it reads as blurry. `maxresdefault` is the same frame at 1280x720 with no bars.
+/// `shortcut:` a rare pre-2010 upload has no maxres and 404s; the UI falls back to the original URL.
+fn hires_art(url: &str) -> String {
+    if url.contains("/vi/") && url.contains("hqdefault") {
+        url.replace("hqdefault", "maxresdefault")
+    } else {
+        url.to_string()
+    }
+}
+
 fn parse_item(r: &Value) -> Option<Value> {
     // Playlist/chart rows carry the id on navigationEndpoint; search rows put it in the overlay.
     let watch = r
@@ -124,12 +135,13 @@ fn parse_item(r: &Value) -> Option<Value> {
         .and_then(|t| t.get("thumbnail"))
         .and_then(|t| t.get("thumbnails"))
         .and_then(|t| t.as_array());
-    let art = thumbs
-        .and_then(|a| a.last())
-        .and_then(|t| t.get("url"))
-        .and_then(|u| u.as_str())
-        .unwrap_or("")
-        .to_string();
+    let art = hires_art(
+        thumbs
+            .and_then(|a| a.last())
+            .and_then(|t| t.get("url"))
+            .and_then(|u| u.as_str())
+            .unwrap_or(""),
+    );
 
     let mut parts = subtitle.split(" • ");
     let artist = parts.next().unwrap_or("").to_string();
@@ -290,13 +302,14 @@ fn two_row_item(c: &Value) -> Option<Value> {
     let browse_params = r
         .pointer("/navigationEndpoint/browseEndpoint/params")
         .and_then(|p| p.as_str());
-    let art = r
-        .pointer("/thumbnailRenderer/musicThumbnailRenderer/thumbnail/thumbnails")
-        .and_then(|t| t.as_array())
-        .and_then(|a| a.last())
-        .and_then(|t| t.get("url"))
-        .and_then(|u| u.as_str())
-        .unwrap_or("");
+    let art = hires_art(
+        r.pointer("/thumbnailRenderer/musicThumbnailRenderer/thumbnail/thumbnails")
+            .and_then(|t| t.as_array())
+            .and_then(|a| a.last())
+            .and_then(|t| t.get("url"))
+            .and_then(|u| u.as_str())
+            .unwrap_or(""),
+    );
     Some(json!({
         "id": id,
         "params": browse_params,
@@ -564,13 +577,14 @@ fn collect_radio_items(v: &Value, out: &mut Vec<Value>) {
                     .unwrap_or_default();
                 // Byline is "Artist • Album • Year"; only the artist is useful to the UI.
                 let artist = byline.split(" • ").next().unwrap_or("").to_string();
-                let art = r
-                    .pointer("/thumbnail/thumbnails")
-                    .and_then(|t| t.as_array())
-                    .and_then(|a| a.last())
-                    .and_then(|t| t.get("url"))
-                    .and_then(|u| u.as_str())
-                    .unwrap_or("");
+                let art = hires_art(
+                    r.pointer("/thumbnail/thumbnails")
+                        .and_then(|t| t.as_array())
+                        .and_then(|a| a.last())
+                        .and_then(|t| t.get("url"))
+                        .and_then(|u| u.as_str())
+                        .unwrap_or(""),
+                );
                 if !id.is_empty() && !title.is_empty() {
                     out.push(json!({
                         "id": id, "title": title, "artist": artist, "album": "",
@@ -853,7 +867,7 @@ fn dz_track(t: &Value) -> Option<Value> {
         "title": t.get("title").and_then(|x| x.as_str()).unwrap_or(""),
         "artist": t.pointer("/artist/name").and_then(|x| x.as_str()).unwrap_or(""),
         "album": t.pointer("/album/title").and_then(|x| x.as_str()).unwrap_or(""),
-        "art": t.pointer("/album/cover_medium").and_then(|x| x.as_str()).unwrap_or(""),
+        "art": t.pointer("/album/cover_xl").and_then(|x| x.as_str()).unwrap_or(""),
         "duration": t.get("duration").and_then(|x| x.as_u64()).unwrap_or(0) * 1000
     }))
 }
@@ -1266,6 +1280,17 @@ mod tests {
     }
 
     #[test]
+    fn hires_art_upgrades_youtube_thumbs_only() {
+        assert_eq!(
+            hires_art("https://i.ytimg.com/vi/abc/hqdefault.jpg?sqp=1"),
+            "https://i.ytimg.com/vi/abc/maxresdefault.jpg?sqp=1"
+        );
+        // Deezer and Spotify urls must pass through untouched.
+        assert_eq!(hires_art("https://cdn-images.dzcdn.net/x/1000x1000.jpg"), "https://cdn-images.dzcdn.net/x/1000x1000.jpg");
+        assert_eq!(hires_art(""), "");
+    }
+
+    #[test]
     fn next_data_is_extracted_from_embed_html() {
         let html = r#"<html><script id="__NEXT_DATA__" type="application/json">{"a":1}</script></html>"#;
         assert_eq!(extract_next_data(html).as_deref(), Some(r#"{"a":1}"#));
@@ -1277,7 +1302,7 @@ mod tests {
         let t = json!({
             "id": 116348632, "title": "Hey Jude", "duration": 429,
             "artist": {"name": "The Beatles"},
-            "album": {"title": "1", "cover_medium": "https://x/y.jpg"}
+            "album": {"title": "1", "cover_xl": "https://x/y.jpg"}
         });
         let m = dz_track(&t).unwrap();
         assert_eq!(m["duration"], 429000);

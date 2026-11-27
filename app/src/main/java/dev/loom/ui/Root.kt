@@ -2,6 +2,15 @@ package dev.loom.ui
 
 import androidx.activity.compose.BackHandler
 import android.content.Intent
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.PlayCircle
+import androidx.compose.material.icons.rounded.RemoveCircleOutline
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Button
+import androidx.compose.foundation.layout.fillMaxHeight
+import dev.loom.core.NamedPlaylist
 import coil.compose.AsyncImage
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
@@ -134,7 +143,15 @@ fun Root(vm: LoomViewModel) {
             tabStates.SaveableStateProvider(state.tab.name) {
                 val open = state.openHere
                 if (open != null) {
-                    PlaylistDetail(open.title, state, vm::closePlaylist, vm::play, vm::toggleLike)
+                    PlaylistDetail(
+                        state = state,
+                        onBack = vm::closePlaylist,
+                        onPlay = vm::play,
+                        onLike = vm::toggleLike,
+                        onRemoveTrack = vm::removeFromPlaylist,
+                        onRename = { vm.renamePlaylist(open.title, it) },
+                        onDelete = { vm.removePlaylist(open.title); vm.closePlaylist() },
+                    )
                 } else {
                     when (state.tab) {
                         Tab.HOME -> HomeScreen(state, vm::openCollection, vm::play, vm::toggleLike, vm::openMenu)
@@ -150,6 +167,7 @@ fun Root(vm: LoomViewModel) {
                                 vm::playQuery,
                                 vm::createPlaylist,
                                 vm::removePlaylist,
+                                vm::openLocal,
                                 imp,
                                 vm::setImportSource,
                                 vm::setImportInput,
@@ -235,6 +253,9 @@ fun Root(vm: LoomViewModel) {
 
         // Track actions, opened from any three-dot button.
         val menu by vm.menuTrack.collectAsState()
+        // Set when "Buat playlist baru" is tapped: the track waiting for a new home.
+        var newPl by remember { mutableStateOf<Track?>(null) }
+        var newPlName by remember { mutableStateOf("") }
         menu?.let { t ->
             val ctx = LocalContext.current
             TrackActionsSheet(
@@ -246,6 +267,7 @@ fun Root(vm: LoomViewModel) {
                 onQueue = { vm.enqueue(t) },
                 onLike = { vm.toggleLike(t); vm.closeMenu() },
                 onSaveTo = { name -> vm.saveToPlaylist(name, t) },
+                onCreate = { newPl = t },
                 onShare = {
                     val i = Intent(Intent.ACTION_SEND).apply {
                         type = "text/plain"
@@ -255,6 +277,31 @@ fun Root(vm: LoomViewModel) {
                     vm.closeMenu()
                 },
                 onArtist = { vm.openArtist(t) },
+            )
+        }
+
+        newPl?.let { t ->
+            AlertDialog(
+                onDismissRequest = { newPl = null; newPlName = "" },
+                title = { Text("Playlist baru") },
+                text = {
+                    OutlinedTextField(
+                        value = newPlName,
+                        onValueChange = { newPlName = it },
+                        singleLine = true,
+                        placeholder = { Text("Nama playlist") },
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        vm.createPlaylistWith(newPlName, t)
+                        newPl = null
+                        newPlName = ""
+                    }) { Text("Buat") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { newPl = null; newPlName = "" }) { Text("Batal") }
+                },
             )
         }
 
@@ -363,6 +410,7 @@ private fun QueueScreen(
     onPlayQuery: (String) -> Unit,
     onCreatePlaylist: (String) -> Boolean,
     onRemovePlaylist: (String) -> Unit,
+    onOpenLocal: (String) -> Unit,
     importState: LoomViewModel.Importing,
     onImportSource: (Source) -> Unit,
     onImportInput: (String) -> Unit,
@@ -401,35 +449,15 @@ private fun QueueScreen(
                     }
                 }
                 if (state.playlists.isEmpty()) {
-                    item { Caption("No playlists yet — tap + to name one") }
+                    item { EmptyState("Belum ada playlist", "Tap + untuk membuat, atau ikon unduh untuk impor.") }
                 } else {
                     items(state.playlists, key = { "p" + it.name }) { pl ->
-                        Row(
-                            Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(
-                                Modifier
-                                    .weight(1f)
-                                    .clickable { onPlay(pl.tracks.firstOrNull() ?: return@clickable, pl.tracks) }
-                                    .padding(vertical = 12.dp),
-                            ) {
-                                Text(pl.name, style = MaterialTheme.typography.titleMedium)
-                                Text(
-                                    "${pl.tracks.size} tracks",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            IconButton(onClick = { onRemovePlaylist(pl.name) }) {
-                                Icon(
-                                    Icons.Rounded.Delete,
-                                    contentDescription = "Delete ${pl.name}",
-                                    modifier = Modifier.size(19.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
+                        LocalPlaylistCard(
+                            pl,
+                            onOpen = { onOpenLocal(pl.name) },
+                            onPlay = { pl.tracks.firstOrNull()?.let { t -> onPlay(t, pl.tracks) } },
+                            onDelete = { onRemovePlaylist(pl.name) },
+                        )
                     }
                 }
                 if (state.saved.isNotEmpty()) {
@@ -571,42 +599,248 @@ private fun QueueScreen(
 
 @Composable
 private fun PlaylistDetail(
-    title: String,
     state: UiState,
     onBack: () -> Unit,
     onPlay: (Track, List<Track>) -> Unit,
     onLike: (Track) -> Unit,
+    onRemoveTrack: (Track) -> Unit,
+    onRename: (String) -> Unit,
+    onDelete: () -> Unit,
 ) {
-    val tracks = state.openHere?.tracks ?: emptyList()
+    val open = state.openHere ?: return
+    val title = open.title
+    val tracks = open.tracks
+    var renaming by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    var draft by remember { mutableStateOf(title) }
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().padding(start = 8.dp, top = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, contentDescription = "Back") }
+            Spacer(Modifier.weight(1f))
+            if (open.local) {
+                IconButton(onClick = { draft = title; renaming = true }) {
+                    Icon(Icons.Rounded.Edit, contentDescription = "Rename playlist")
+                }
+                IconButton(onClick = { confirmDelete = true }) {
+                    Icon(Icons.Rounded.Delete, contentDescription = "Delete playlist")
+                }
+            }
         }
         if (state.loading && tracks.isEmpty()) {
             // Title already known from the tapped card, so the header is real, not a placeholder.
-            Text(
-                title,
-                style = MaterialTheme.typography.displaySmall,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
-            )
+            PlaylistHero(title, tracks, null)
             TrackSkeleton()
         } else {
             LazyColumn(contentPadding = PaddingValues(bottom = 190.dp)) {
-                item {
-                    Text(
-                        title,
-                        style = MaterialTheme.typography.displaySmall,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
-                    )
-                }
-                items(tracks, key = { it.source.name + it.id }) { t ->
-                    TrackRow(t, selected = state.current?.id == t.id, onLike = { onLike(t) }) {
-                        onPlay(t, tracks)
+                item { PlaylistHero(title, tracks) { onPlay(tracks.first(), tracks) } }
+                if (tracks.isEmpty()) {
+                    item {
+                        EmptyState(
+                            if (open.local) "Playlist masih kosong" else "No tracks",
+                            if (open.local) "Tambahkan lagu lewat menu titik tiga di tiap lagu."
+                            else "This playlist returned nothing.",
+                        )
                     }
                 }
+                itemsIndexed(tracks, key = { _, t -> t.source.name + t.id }) { i, t ->
+                    NumberedTrackRow(
+                        rank = i + 1,
+                        t = t,
+                        selected = state.current?.id == t.id,
+                        onPlay = { onPlay(t, tracks) },
+                        onLike = { onLike(t) },
+                        onMenu = { onLike(t) },
+                        // Only a playlist the user owns can lose a track.
+                        onRemove = if (open.local) ({ onRemoveTrack(t) }) else null,
+                    )
+                }
+            }
+        }
+    }
+
+    if (renaming) {
+        AlertDialog(
+            onDismissRequest = { renaming = false },
+            title = { Text("Ganti nama playlist") },
+            text = {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    singleLine = true,
+                    placeholder = { Text("Nama playlist") },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { onRename(draft); renaming = false }) { Text("Simpan") }
+            },
+            dismissButton = { TextButton(onClick = { renaming = false }) { Text("Batal") } },
+        )
+    }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Hapus \"$title\"?") },
+            text = { Text("Playlist dan ${tracks.size} lagu di dalamnya akan hilang.") },
+            confirmButton = {
+                TextButton(onClick = { confirmDelete = false; onDelete() }) {
+                    Text("Hapus", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Batal") } },
+        )
+    }
+}
+
+/**
+ * Header for a playlist page: a 2x2 mosaic of the first four covers, the name, the count and a
+ * play button. A bare title line gave no sense of what was inside.
+ */
+@Composable
+private fun PlaylistHero(title: String, tracks: List<Track>, onPlayAll: (() -> Unit)?) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
+        MosaicCover(tracks, 104.dp)
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.headlineMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (tracks.isEmpty()) "Kosong" else "${tracks.size} lagu",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (onPlayAll != null && tracks.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                Button(
+                    onClick = onPlayAll,
+                    shape = RoundedCornerShape(50),
+                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp),
+                ) {
+                    Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Putar")
+                }
+            }
+        }
+    }
+}
+
+/** One cover when there is one, a 2x2 grid of the first four when there are more. */
+@Composable
+fun MosaicCover(tracks: List<Track>, size: androidx.compose.ui.unit.Dp) {
+    val arts = tracks.mapNotNull { it.art.takeIf(String::isNotBlank) }.distinct().take(4)
+    val shape = RoundedCornerShape(18.dp)
+    Box(Modifier.size(size).clip(shape).background(MaterialTheme.colorScheme.surfaceVariant)) {
+        when (arts.size) {
+            0 -> Icon(
+                Icons.Rounded.QueueMusic,
+                contentDescription = null,
+                modifier = Modifier.align(Alignment.Center).size(size / 3),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            1, 2, 3 -> AsyncImage(
+                model = arts.first(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+            else -> Column(Modifier.fillMaxSize()) {
+                Row(Modifier.weight(1f)) {
+                    arts.take(2).forEach { a ->
+                        AsyncImage(
+                            model = a,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
+                        )
+                    }
+                }
+                Row(Modifier.weight(1f)) {
+                    arts.drop(2).forEach { a ->
+                        AsyncImage(
+                            model = a,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A playlist row in the library: cover, name, count and a play button. Tapping the body opens the
+ * playlist so its tracks are visible; the old row jumped straight to playback with no preview.
+ */
+@Composable
+private fun LocalPlaylistCard(
+    pl: NamedPlaylist,
+    onOpen: () -> Unit,
+    onPlay: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var menu by remember { mutableStateOf(false) }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 3.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .clickable(onClick = onOpen)
+            .padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        MosaicCover(pl.tracks, 60.dp)
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                pl.name,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                if (pl.tracks.isEmpty()) "Kosong" else "${pl.tracks.size} lagu",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (pl.tracks.isNotEmpty()) {
+            IconButton(onClick = onPlay, modifier = Modifier.size(40.dp)) {
+                Icon(
+                    Icons.Rounded.PlayCircle,
+                    contentDescription = "Putar ${pl.name}",
+                    modifier = Modifier.size(28.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+        Box {
+            IconButton(onClick = { menu = true }, modifier = Modifier.size(40.dp)) {
+                Icon(
+                    Icons.Rounded.MoreVert,
+                    contentDescription = "Playlist menu",
+                    modifier = Modifier.size(19.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(
+                    text = { Text("Buka") },
+                    onClick = { menu = false; onOpen() },
+                )
+                DropdownMenuItem(
+                    text = { Text("Hapus playlist") },
+                    onClick = { menu = false; onDelete() },
+                )
             }
         }
     }
@@ -655,6 +889,7 @@ fun NumberedTrackRow(
     onPlay: () -> Unit,
     onLike: () -> Unit,
     onMenu: () -> Unit,
+    onRemove: (() -> Unit)? = null,
 ) {
     Row(
         Modifier
@@ -711,6 +946,16 @@ fun NumberedTrackRow(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        if (onRemove != null) {
+            IconButton(onClick = onRemove, modifier = Modifier.size(38.dp)) {
+                Icon(
+                    Icons.Rounded.RemoveCircleOutline,
+                    contentDescription = "Remove from playlist",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 }
 
@@ -730,11 +975,12 @@ fun TrackActionsSheet(
     onQueue: () -> Unit,
     onLike: () -> Unit,
     onSaveTo: (String) -> Unit,
+    onCreate: () -> Unit,
     onShare: () -> Unit,
     onArtist: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface) {
-        TrackActionsBody(track, liked, playlists, onDismiss, onPlayNext, onQueue, onLike, onSaveTo, onShare, onArtist)
+        TrackActionsBody(track, liked, playlists, onDismiss, onPlayNext, onQueue, onLike, onSaveTo, onCreate, onShare, onArtist)
     }
 }
 
@@ -749,6 +995,7 @@ fun TrackActionsBody(
     onQueue: () -> Unit,
     onLike: () -> Unit,
     onSaveTo: (String) -> Unit,
+    onCreate: () -> Unit,
     onShare: () -> Unit,
     onArtist: () -> Unit,
 ) {
@@ -789,6 +1036,9 @@ fun TrackActionsBody(
                     SheetRow("Simpan ke $name", Icons.Rounded.PlaylistAdd) { onSaveTo(name) }
                 }
             }
+            // The menu is where a user decides a track belongs somewhere; creating the target here
+            // avoids backing out to the library first.
+            SheetRow("Buat playlist baru", Icons.Rounded.Add) { onCreate() }
             SheetRow("Buka halaman artis", Icons.Rounded.Person) { onArtist() }
         }
 }

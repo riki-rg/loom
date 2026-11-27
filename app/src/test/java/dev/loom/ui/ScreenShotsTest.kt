@@ -6,6 +6,8 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -170,9 +172,31 @@ class ScreenShotsTest {
             onQueue = {},
             onLike = {},
             onSaveTo = {},
+            onCreate = {},
             onShare = {},
             onArtist = {},
         )
+    }
+
+    /** A user playlist page: mosaic cover, name, count, play button, ranked rows. */
+    @Test
+    fun localPlaylistPage() = shoot("playlist-page") {
+        val rows = List(5) { i ->
+            Track("v$i", "Lagu ${i + 1}", "Artis ${i + 1}", "", Source.YT_MUSIC, 200_000)
+        }
+        Column(Modifier.fillMaxSize().padding(top = 20.dp)) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+                MosaicCover(rows, 104.dp)
+                Spacer(Modifier.width(16.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Latihan", style = MaterialTheme.typography.headlineMedium)
+                    Text("5 lagu", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            rows.forEachIndexed { i, t ->
+                NumberedTrackRow(i + 1, t, false, onPlay = {}, onLike = {}, onMenu = {}, onRemove = {})
+            }
+        }
     }
 
     /** The default theme must actually be light: a light surface with a blue accent. */

@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.RemoveCircleOutline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -182,7 +183,13 @@ fun ShelfRow(title: String, items: List<Collection>, onOpen: (Collection) -> Uni
 }
 
 @Composable
-fun TrackRow(t: Track, selected: Boolean, onLike: (() -> Unit)? = null, onClick: () -> Unit) {
+fun TrackRow(
+    t: Track,
+    selected: Boolean,
+    onLike: (() -> Unit)? = null,
+    onRemove: (() -> Unit)? = null,
+    onClick: () -> Unit,
+) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -219,6 +226,16 @@ fun TrackRow(t: Track, selected: Boolean, onLike: (() -> Unit)? = null, onClick:
                 Icon(
                     Icons.Rounded.FavoriteBorder,
                     contentDescription = "Like",
+                    modifier = Modifier.size(19.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (onRemove != null) {
+            IconButton(onClick = onRemove, modifier = Modifier.size(40.dp)) {
+                Icon(
+                    Icons.Rounded.RemoveCircleOutline,
+                    contentDescription = "Remove from playlist",
                     modifier = Modifier.size(19.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

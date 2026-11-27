@@ -74,6 +74,34 @@ class ImportTest {
         assertEquals(3, store.playlists.first { it.name == "mix" }.tracks.size)
     }
 
+    /** Create / read / update / delete on a user playlist. */
+    @Test
+    fun playlistCrudRoundTrip() {
+        val store = Store(app)
+        assertTrue(store.createPlaylist("Latihan"))
+        // Create is idempotent by name, case-insensitively.
+        assertTrue(!store.createPlaylist("latihan"))
+
+        assertEquals(2, store.addAllToPlaylist("Latihan", listOf(track("1"), track("2"))))
+        assertEquals(2, store.playlists.first { it.name == "Latihan" }.tracks.size)
+
+        // Update: rename keeps the tracks, rejects a duplicate name.
+        assertTrue(!store.renamePlaylist("Latihan", "Latihan"))
+        assertTrue(store.createPlaylist("Lain"))
+        assertTrue(!store.renamePlaylist("Latihan", "Lain"))
+        assertTrue(store.renamePlaylist("Latihan", "  Latihan Baru  "))
+        assertEquals(2, store.playlists.first { it.name == "Latihan Baru" }.tracks.size)
+
+        // Delete one track, not the playlist.
+        assertTrue(store.removeFromPlaylist("Latihan Baru", track("1")))
+        assertTrue(!store.removeFromPlaylist("Latihan Baru", track("1")))
+        assertEquals(1, store.playlists.first { it.name == "Latihan Baru" }.tracks.size)
+
+        // Delete the playlist itself.
+        store.removePlaylist("Latihan Baru")
+        assertTrue(store.playlists.none { it.name == "Latihan Baru" })
+    }
+
     @Test
     fun bulkAddToMissingPlaylistIsANoOp() {
         assertEquals(0, Store(app).addAllToPlaylist("nope", listOf(track("1"))))

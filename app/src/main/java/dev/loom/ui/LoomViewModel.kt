@@ -47,8 +47,8 @@ enum class Lib(val label: String) {
     QUEUE("Queue"),
 }
 
-/** A playlist the user opened from home / for-you. */
-data class OpenPlaylist(val title: String, val tracks: List<Track>)
+/** A page opened above a tab: a provider playlist, or one of the user's own (`local`). */
+data class OpenPlaylist(val title: String, val tracks: List<Track>, val local: Boolean = false)
 
 data class UiState(
     val tab: Tab = Tab.HOME,
@@ -63,6 +63,8 @@ data class UiState(
     val lib: Lib = Lib.PLAYLISTS,
     val playlists: List<dev.loom.core.NamedPlaylist> = emptyList(),
     val lyrics: String? = null,
+    /** Track the current `lyrics` belong to; null means nothing fetched yet. */
+    val lyricsFor: String? = null,
     val syncedLyrics: List<dev.loom.core.LyricLine> = emptyList(),
     /** Equalizer preset name; applied by the player service. */
     val eq: String = "Flat",
@@ -387,13 +389,19 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
     fun openLyrics() { _state.value = _state.value.copy(lyricsFull = true) }
     fun closeLyrics() { _state.value = _state.value.copy(lyricsFull = false) }
 
-    /** Lyrics are fetched on demand and cached per track id, so the toggle is instant after. */
+    /**
+     * Lyrics belong to a track, not to the player. Guarding on `lyrics != null` alone left the
+     * previous song's words on screen after a skip, so the guard is keyed on the track id.
+     */
     fun loadLyrics() {
         val t = _state.value.current ?: return
-        if (_state.value.lyrics != null) return
+        if (_state.value.lyricsFor == t.id) return
+        _state.value = _state.value.copy(lyricsFor = t.id, lyrics = null, syncedLyrics = emptyList())
         viewModelScope.launch {
             val (text, synced) = withContext(Dispatchers.IO) { runCatching { Music.lyrics(t) } }
                 .getOrDefault(null to emptyList())
+            // A slow response for a track that is no longer playing must not overwrite the new one.
+            if (_state.value.current?.id != t.id) return@launch
             _state.value = _state.value.copy(lyrics = text, syncedLyrics = synced)
         }
     }
@@ -417,6 +425,50 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
     fun removePlaylist(name: String) {
         store.removePlaylist(name)
         _state.value = _state.value.copy(playlists = store.playlists)
+    }
+
+    fun renamePlaylist(old: String, new: String): Boolean {
+        val ok = store.renamePlaylist(old, new)
+        if (ok) {
+            _state.value = _state.value.copy(
+                playlists = store.playlists,
+                // Keep the open page's title in step with the rename.
+                openPlaylist = _state.value.openPlaylist.mapValues { (_, v) ->
+                    if (v.title == old) v.copy(title = new.trim()) else v
+                },
+            )
+        }
+        return ok
+    }
+
+    /** Open a user playlist as a real page, so it gets a header, rows and its own actions. */
+    fun openLocal(name: String) {
+        val pl = store.playlists.firstOrNull { it.name == name } ?: return
+        val tab = _state.value.tab
+        _state.value = _state.value.copy(
+            openPlaylist = _state.value.openPlaylist + (tab to OpenPlaylist(pl.name, pl.tracks, local = true)),
+        )
+    }
+
+    fun removeFromPlaylist(t: Track) {
+        val open = _state.value.openHere ?: return
+        if (!open.local) return
+        store.removeFromPlaylist(open.title, t)
+        val fresh = store.playlists.firstOrNull { it.name == open.title }?.tracks ?: emptyList()
+        val tab = _state.value.tab
+        _state.value = _state.value.copy(
+            playlists = store.playlists,
+            openPlaylist = _state.value.openPlaylist + (tab to open.copy(tracks = fresh)),
+        )
+    }
+
+    /** Create a playlist and drop the track straight into it, from the track menu. */
+    fun createPlaylistWith(name: String, t: Track): Boolean {
+        if (!createPlaylist(name)) return false
+        store.addToPlaylist(name.trim(), t)
+        _state.value = _state.value.copy(playlists = store.playlists)
+        _menuTrack.value = null
+        return true
     }
 
     /** Import state, kept separate so the library list never flickers during a fetch. */

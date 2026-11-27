@@ -141,6 +141,25 @@ class Store(ctx: Context) {
         playlists = playlists.filterNot { it.name == name }
     }
 
+    fun renamePlaylist(old: String, new: String): Boolean {
+        val clean = new.trim()
+        if (clean.isBlank() || clean == old) return false
+        if (playlists.any { it.name.equals(clean, ignoreCase = true) && it.name != old }) return false
+        if (playlists.none { it.name == old }) return false
+        playlists = playlists.map { if (it.name == old) it.copy(name = clean) else it }
+        return true
+    }
+
+    fun removeFromPlaylist(name: String, t: Track): Boolean {
+        val target = playlists.firstOrNull { it.name == name } ?: return false
+        if (target.tracks.none { it.id == t.id && it.source == t.source }) return false
+        playlists = playlists.map {
+            if (it.name == name) it.copy(tracks = it.tracks.filterNot { x -> x.id == t.id && x.source == t.source })
+            else it
+        }
+        return true
+    }
+
     /** Weekly recommendation is computed once per ISO week and reused for the rest of it. */
     fun weekly(week: String): List<Track> = readTracks("weekly:$week")
 
