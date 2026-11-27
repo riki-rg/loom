@@ -35,6 +35,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -60,14 +61,16 @@ fun Modifier.glass(
     color: Color = Color.Unspecified,
     corner: Int = 24,
     blur: Int = 24,
+    shape: Shape? = null,
 ): Modifier {
     val dark = MaterialTheme.colorScheme.surface.luminance() < 0.35f
     val base = MaterialTheme.colorScheme.surface
+    val outline = shape ?: RoundedCornerShape(corner.dp)
     val fill = if (color == Color.Unspecified) {
         if (dark) Color.White.copy(alpha = 0.07f) else Color.White.copy(alpha = 0.55f)
     } else color
     return this
-        .clip(RoundedCornerShape(corner.dp))
+        .clip(outline)
         .hazeEffect(
             state = haze,
             style = HazeStyle(
@@ -89,7 +92,7 @@ fun Modifier.glass(
                     listOf(Color.White.copy(alpha = 0.9f), Color.Black.copy(alpha = 0.06f))
                 },
             ),
-            shape = RoundedCornerShape(corner.dp),
+            shape = outline,
         )
 }
 
