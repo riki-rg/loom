@@ -23,13 +23,20 @@ class ImportTest {
     private fun track(id: String) = Track(id, "t$id", "a", "", Source.SPOTIFY, 1000)
 
     @Test
-    fun importableProvidersAreSpotifyYtAndDeezer() {
+    fun importableProvidersAreSpotifyYtDeezerAndSoundcloud() {
         assertEquals(
-            listOf(Source.SPOTIFY, Source.YT_MUSIC, Source.DEEZER),
+            listOf(Source.SPOTIFY, Source.YT_MUSIC, Source.DEEZER, Source.SOUNDCLOUD),
             Music.importable,
         )
-        // SoundCloud cannot be imported; asking for it must fail loudly, not silently no-op.
-        assertTrue(runCatching { Music.importPlaylist(Source.SOUNDCLOUD, "x") }.isFailure)
+    }
+
+    @Test
+    fun providerKeysMatchTheRustSide() {
+        // A typo here surfaces only as "unknown provider" at runtime, after a network round trip.
+        assertEquals("spotify", Music.providerKey(Source.SPOTIFY))
+        assertEquals("ytm", Music.providerKey(Source.YT_MUSIC))
+        assertEquals("deezer", Music.providerKey(Source.DEEZER))
+        assertEquals("soundcloud", Music.providerKey(Source.SOUNDCLOUD))
     }
 
     @Test

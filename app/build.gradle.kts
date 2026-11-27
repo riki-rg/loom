@@ -24,8 +24,8 @@ android {
         applicationId = "dev.loom"
         minSdk = 26
         targetSdk = 35
-        versionCode = 14
-        versionName = "0.9.0"
+        versionCode = 15
+        versionName = "0.9.1"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
@@ -84,6 +84,21 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 }
+
+// The .so is not built by AGP. Without this the APK ships whatever jniLibs held last, which is
+// how v0.9.0 went out with a core that predated the new JNI symbols and died with
+// UnsatisfiedLinkError on first call. Wiring it to the task graph makes that impossible.
+val buildCore by tasks.registering(Exec::class) {
+    workingDir = rootProject.projectDir
+    commandLine("bash", "build-core.sh")
+    inputs.dir(rootProject.file("core/src"))
+    inputs.file(rootProject.file("core/Cargo.toml"))
+    inputs.file(rootProject.file("build-core.sh"))
+    outputs.dir(rootProject.file("app/src/main/jniLibs"))
+}
+
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
+    .configureEach { dependsOn(buildCore) }
 
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")

@@ -197,18 +197,31 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
             play(Track(c.id, c.title, c.subtitle.substringBefore(" • "), c.art, Source.YT_MUSIC))
             return
         }
-        _state.value = _state.value.copy(loading = true, error = null)
+        // Push the detail page before the fetch, with no tracks yet: the tap answers instantly
+        // and the screen can show its own skeleton instead of a spinner over the old list.
+        val tab = _state.value.tab
+        _state.value = _state.value.copy(
+            openPlaylist = _state.value.openPlaylist + (tab to OpenPlaylist(c.title, emptyList())),
+            loading = true,
+            error = null,
+        )
         viewModelScope.launch {
             val res = withContext(Dispatchers.IO) { runCatching { Music.playlist(c.id, c.params) } }
             _state.value = res.fold(
-                onSuccess = {
-                    val tab = _state.value.tab
+                onSuccess = { tracks ->
                     _state.value.copy(
-                        openPlaylist = _state.value.openPlaylist + (tab to OpenPlaylist(c.title, it)),
+                        openPlaylist = _state.value.openPlaylist + (tab to OpenPlaylist(c.title, tracks)),
                         loading = false,
                     )
                 },
-                onFailure = { _state.value.copy(loading = false, error = "Could not open playlist: " + it.short()) },
+                onFailure = {
+                    // Drop the empty page again, otherwise the user is stuck on a blank detail.
+                    _state.value.copy(
+                        openPlaylist = _state.value.openPlaylist - tab,
+                        loading = false,
+                        error = "Could not open playlist: " + it.short(),
+                    )
+                },
             )
         }
     }
@@ -368,9 +381,9 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
             }
             res.fold(
                 onSuccess = { imported ->
-                    val base = name.trim().ifBlank {
+                    val base = name.trim().ifBlank { imported.name.ifBlank {
                         "${req.source.label} · ${imported.tracks.size} tracks"
-                    }
+                    } }
                     // Pick a free name first, then create once — createPlaylist refuses duplicates.
                     var final = base
                     var n = 2

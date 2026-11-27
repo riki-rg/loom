@@ -117,10 +117,19 @@ object Music {
         Source.SPOTIFY,
         Source.YT_MUSIC,
         Source.DEEZER,
+        Source.SOUNDCLOUD,
     )
 
-    /** One imported playlist: its name (when the provider exposes one) and its tracks. */
-    data class Imported(val tracks: List<Track>)
+    /** One imported playlist: the provider's own title (often blank) and its tracks. */
+    data class Imported(val name: String, val tracks: List<Track>)
+
+    /** Provider key understood by `Core.importPlaylist`; kept here so it can be tested. */
+    fun providerKey(source: Source): String = when (source) {
+        Source.SPOTIFY -> "spotify"
+        Source.DEEZER -> "deezer"
+        Source.YT_MUSIC -> "ytm"
+        Source.SOUNDCLOUD -> "soundcloud"
+    }
 
     /**
      * Import a playlist from a pasted URL, share link or bare id. Tracks keep the provider they
@@ -129,15 +138,11 @@ object Music {
      * length when a match exists.
      */
     fun importPlaylist(source: Source, input: String): Imported {
-        val provider = when (source) {
-            Source.SPOTIFY -> "spotify"
-            Source.DEEZER -> "deezer"
-            Source.YT_MUSIC -> "ytm"
-            Source.SOUNDCLOUD -> throw CoreException("SoundCloud sets cannot be imported")
-        }
-        val tracks = parseTracks(Core.importPlaylist(provider, input), source)
+        val provider = providerKey(source)
+        val o = unwrap(Core.importPlaylist(provider, input)) as JSONObject
+        val tracks = parseTracks(o.getJSONArray("tracks").toString(), source)
         if (tracks.isEmpty()) throw CoreException("that playlist has no tracks")
-        return Imported(tracks)
+        return Imported(o.optString("name").trim(), tracks)
     }
 
     fun stream(track: Track): Stream {

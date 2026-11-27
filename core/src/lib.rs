@@ -885,20 +885,48 @@ fn id_from(input: &str, prefixes: &[&str]) -> String {
     s.split(['?', '&', '#']).next().unwrap_or(s).trim_matches('/').to_string()
 }
 
+fn text_of(v: &Value) -> String {
+    if let Some(s) = v.get("simpleText").and_then(|x| x.as_str()) {
+        return s.to_string();
+    }
+    v.pointer("/runs/0/text")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn yt_playlist_title(res: &Value) -> String {
+    for k in [
+        "musicResponsiveHeaderRenderer",
+        "musicDetailHeaderRenderer",
+        "musicEditablePlaylistDetailHeaderRenderer",
+    ] {
+        let mut hits = Vec::new();
+        find_key(res, k, &mut hits);
+        if let Some(h) = hits.first() {
+            let t = text_of(&h["title"]);
+            if !t.is_empty() {
+                return t;
+            }
+        }
+    }
+    String::new()
+}
+
 fn import_yt(playlist_id: &str) -> Result<Value, String> {
     let id = id_from(playlist_id, &["list=", "/playlist/"]);
-    let browse = format!("VL{id}");
-    let res = yt_browse(&browse, None)?;
+    let res = yt_browse(&format!("VL{id}"), None)?;
     let mut out = Vec::new();
     collect_items(&res, &mut out);
     if out.is_empty() {
         collect_playlist_rows(&res, &mut out);
     }
-    Ok(json!(out))
+    Ok(json!({ "name": yt_playlist_title(&res), "tracks": out }))
 }
 
 fn import_deezer(playlist_id: &str) -> Result<Value, String> {
     let id = id_from(playlist_id, &["/playlist/", "playlist/"]);
+    let meta = dz_get(&format!("https://api.deezer.com/playlist/{id}"))?;
     let res = dz_get(&format!("https://api.deezer.com/playlist/{id}/tracks?limit=100"))?;
     let out: Vec<Value> = res
         .get("data")
@@ -908,7 +936,10 @@ fn import_deezer(playlist_id: &str) -> Result<Value, String> {
     if out.is_empty() {
         return Err("deezer: playlist is empty or private".into());
     }
-    Ok(json!(out))
+    Ok(json!({
+        "name": meta.get("title").and_then(|t| t.as_str()).unwrap_or(""),
+        "tracks": out
+    }))
 }
 
 /// Spotify playlists are read from the embed page's `__NEXT_DATA__`, which carries the full
@@ -962,7 +993,10 @@ fn import_spotify(playlist_id: &str) -> Result<Value, String> {
     if out.is_empty() {
         return Err("spotify: playlist is empty or private".into());
     }
-    Ok(json!(out))
+    Ok(json!({
+        "name": entity.get("name").and_then(|n| n.as_str()).unwrap_or(""),
+        "tracks": out
+    }))
 }
 
 fn extract_next_data(html: &str) -> Option<String> {
@@ -970,6 +1004,60 @@ fn extract_next_data(html: &str) -> Option<String> {
     let start = html.find(marker)? + marker.len();
     let end = html[start..].find("</script>")? + start;
     Some(html[start..end].to_string())
+}
+
+/// SoundCloud sets carry no id in the share URL (`/artist/sets/name`), so the URL is resolved
+/// through the API first; a bare numeric id skips that step.
+fn import_soundcloud(input: &str) -> Result<Value, String> {
+    let cid = sc_client_id()?;
+    let s = input.trim();
+    let set: Value = if s.starts_with("http") || s.contains("soundcloud.com") {
+        http()
+            .get("https://api-v2.soundcloud.com/resolve")
+            .query(&[("url", s), ("client_id", cid.as_str())])
+            .header("User-Agent", UA_WEB)
+            .send()
+            .map_err(|e| e.to_string())?
+            .json()
+            .map_err(|e| format!("soundcloud: cannot resolve that link ({e})"))?
+    } else {
+        let id = id_from(s, &["/sets/"]);
+        http()
+            .get(format!("https://api-v2.soundcloud.com/playlists/{id}"))
+            .query(&[("client_id", cid.as_str())])
+            .header("User-Agent", UA_WEB)
+            .send()
+            .map_err(|e| e.to_string())?
+            .json()
+            .map_err(|e| e.to_string())?
+    };
+    let out: Vec<Value> = set
+        .get("tracks")
+        .and_then(|t| t.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|t| {
+                    let id = t.get("id")?.as_u64()?;
+                    Some(json!({
+                        "id": id.to_string(),
+                        "title": t.get("title").and_then(|x| x.as_str()).unwrap_or(""),
+                        "artist": t.pointer("/user/username").and_then(|x| x.as_str()).unwrap_or(""),
+                        "art": t.get("artwork_url").and_then(|x| x.as_str())
+                            .unwrap_or_else(|| t.pointer("/user/avatar_url").and_then(|x| x.as_str()).unwrap_or(""))
+                            .replace("-large", "-t500x500"),
+                        "duration": t.get("duration").and_then(|x| x.as_u64()).unwrap_or(0)
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if out.is_empty() {
+        return Err("soundcloud: set is empty or private".into());
+    }
+    Ok(json!({
+        "name": set.get("title").and_then(|t| t.as_str()).unwrap_or(""),
+        "tracks": out
+    }))
 }
 
 // ---------- JNI bridge ----------
@@ -1065,6 +1153,7 @@ pub extern "system" fn Java_dev_loom_core_Core_importPlaylist(
         "yt" | "ytm" => import_yt(&i),
         "spotify" => import_spotify(&i),
         "deezer" => import_deezer(&i),
+        "soundcloud" => import_soundcloud(&i),
         other => Err(format!("unknown provider: {other}")),
     })
 }
@@ -1130,6 +1219,17 @@ mod tests {
         );
         assert_eq!(id_from("  37i9dQZF1DXcBWIGoYBM5M  ", &["/playlist/"]), "37i9dQZF1DXcBWIGoYBM5M");
         assert_eq!(id_from("spotify:playlist:37i9dQZF1DXcBWIGoYBM5M", &["playlist:"]), "37i9dQZF1DXcBWIGoYBM5M");
+    }
+
+    #[test]
+    fn playlist_title_is_pulled_from_any_header_shape() {
+        // The header key differs by surface; the walker must find all three.
+        let responsive = json!({"a":{"musicResponsiveHeaderRenderer":{"title":{"runs":[{"text":"Popular Music Videos"}]}}}});
+        assert_eq!(yt_playlist_title(&responsive), "Popular Music Videos");
+        let detail = json!({"b":{"musicDetailHeaderRenderer":{"title":{"simpleText":"Chill Mix"}}}});
+        assert_eq!(yt_playlist_title(&detail), "Chill Mix");
+        assert_eq!(yt_playlist_title(&json!({"c":{}})), "");
+        assert_eq!(text_of(&json!({"runs":[{"text":"x"}]})), "x");
     }
 
     #[test]
@@ -1290,14 +1390,16 @@ mod import_live {
     #[test]
     #[ignore]
     fn live_import_all_providers() {
-        let sp = import_spotify("https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M").expect("spotify");
-        println!("spotify {} tracks, first: {}", sp.as_array().unwrap().len(), sp[0]);
-        let dz = import_deezer("https://www.deezer.com/en/playlist/908622995").expect("deezer");
-        println!("deezer {} tracks, first: {}", dz.as_array().unwrap().len(), dz[0]);
-        let yt = import_yt("https://music.youtube.com/playlist?list=PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI").expect("yt");
-        println!("yt {} tracks, first: {}", yt.as_array().unwrap().len(), yt[0]);
-        assert!(!sp.as_array().unwrap().is_empty());
-        assert!(!dz.as_array().unwrap().is_empty());
-        assert!(!yt.as_array().unwrap().is_empty());
+        for (label, r) in [
+            ("spotify", import_spotify("https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M")),
+            ("deezer", import_deezer("https://www.deezer.com/en/playlist/908622995")),
+            ("yt", import_yt("https://music.youtube.com/playlist?list=PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI")),
+        ] {
+            let v = r.expect(label);
+            let n = v["tracks"].as_array().unwrap().len();
+            println!("{label}: name={:?} n={n} first={}", v["name"], v["tracks"][0]["title"]);
+            assert!(n > 0, "{label} returned no tracks");
+            assert!(!v["name"].as_str().unwrap().is_empty(), "{label} has no name");
+        }
     }
 }

@@ -2,6 +2,10 @@ package dev.loom.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -258,6 +263,7 @@ private fun ForYouScreen(state: UiState, onOpen: (Collection) -> Unit) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun QueueScreen(
     state: UiState,
@@ -382,12 +388,17 @@ private fun QueueScreen(
             text = {
                 Column {
                     Text(
-                        "Paste a playlist link. Spotify, YouTube Music and Deezer all work.",
+                        "Paste a playlist link. Spotify, YouTube Music, Deezer and SoundCloud all work.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(14.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Four providers no longer fit one row on a narrow screen; wrap instead of
+                    // shrinking the labels.
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                         Music.importable.forEach { s ->
                             Chip(s.label, s == importState.source) { onImportSource(s) }
                         }
@@ -401,6 +412,7 @@ private fun QueueScreen(
                                 when (importState.source) {
                                     Source.SPOTIFY -> "open.spotify.com/playlist/…"
                                     Source.DEEZER -> "deezer.com/playlist/…"
+                                    Source.SOUNDCLOUD -> "soundcloud.com/artist/sets/…"
                                     else -> "music.youtube.com/playlist?list=…"
                                 },
                             )
@@ -484,8 +496,14 @@ private fun PlaylistDetail(
         ) {
             IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, contentDescription = "Back") }
         }
-        if (state.loading) {
-            CenterSpinner()
+        if (state.loading && tracks.isEmpty()) {
+            // Title already known from the tapped card, so the header is real, not a placeholder.
+            Text(
+                title,
+                style = MaterialTheme.typography.displaySmall,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+            )
+            TrackSkeleton()
         } else {
             LazyColumn(contentPadding = PaddingValues(bottom = 190.dp)) {
                 item {
@@ -499,6 +517,40 @@ private fun PlaylistDetail(
                     TrackRow(t, selected = state.current?.id == t.id, onLike = { onLike(t) }) {
                         onPlay(t, tracks)
                     }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Row-shaped placeholders shown while a detail page loads. Grey blocks in the real row geometry
+ * beat a centred spinner: the screen answers the tap immediately and nothing jumps when the
+ * data lands, because the placeholder already occupies the final layout.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun TrackSkeleton() {
+    val alpha by rememberInfiniteTransition(label = "skeleton").animateFloat(
+        initialValue = 0.35f,
+        targetValue = 0.7f,
+        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
+        label = "skeletonPulse",
+    )
+    val block = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f * (alpha / 0.5f))
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        // Artwork + two text lines: exactly the TrackRow footprint.
+        repeat(7) {
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(52.dp).background(block, RoundedCornerShape(12.dp)))
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Box(Modifier.fillMaxWidth(0.62f).height(13.dp).background(block, RoundedCornerShape(4.dp)))
+                    Spacer(Modifier.height(8.dp))
+                    Box(Modifier.fillMaxWidth(0.38f).height(11.dp).background(block, RoundedCornerShape(4.dp)))
                 }
             }
         }

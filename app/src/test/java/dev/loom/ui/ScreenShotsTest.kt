@@ -6,6 +6,11 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -114,6 +119,19 @@ class ScreenShotsTest {
             onToggle = {},
             onSkip = {},
         )
+    }
+
+    /** Grey row placeholders in the final row geometry, shown while a collection loads. */
+    @Test
+    fun skeletonDetail() = shoot("skeleton") {
+        Column(Modifier.fillMaxSize().padding(top = 24.dp)) {
+            Text(
+                "Kompilasi Lagu Pop",
+                style = MaterialTheme.typography.displaySmall,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+            )
+            TrackSkeleton()
+        }
     }
 
     /** The default theme must actually be light: a light surface with a blue accent. */
