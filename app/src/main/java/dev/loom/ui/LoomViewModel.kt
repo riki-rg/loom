@@ -112,12 +112,11 @@ data class UiState(
     /** Radio seeded from the user's own history; the personal half of For You. */
     val forYouTracks: List<Track> = emptyList(),
     /**
-     * The rotating genre block: a genre, the tracks found for it, and whether it is still loading.
-     * Home and For You both read this, so a refresh on either tab shows the same block.
+     * Rotating blocks per tab. Keyed, not shared: one global pair made Home and For You show the
+     * same genre and mood rows, which is the duplication the user asked to avoid.
      */
-    val genreBlock: GenreBlock? = null,
-    /** Mood block: "Rain + Feels", "Night Drive", ... rotates on refresh like the genre block. */
-    val moodBlock: MoodBlock? = null,
+    val genreBlocks: Map<Tab, GenreBlock> = emptyMap(),
+    val moodBlocks: Map<Tab, MoodBlock> = emptyMap(),
     /** Keyed by tab: a detail page opened from For You must not appear on Home. */
     val openPlaylist: Map<Tab, OpenPlaylist> = emptyMap(),
     val queue: List<Track> = emptyList(),
@@ -204,7 +203,7 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
      * `shortcut:` one genre and one mood at a time, ten tracks each. More would triple the network
      * cost of opening a tab for content that sits below the fold.
      */
-    fun loadRotatingBlocks() {
+    fun loadRotatingBlocks(tab: Tab = _state.value.tab) {
         val genres = listOf("Pop Indonesia", "Hip hop", "Dangdut", "Rock", "Lo-fi", "K-pop", "Indie", "R&B")
         val moods = listOf(
             "Rain + Feels" to "hujan galau akustik",
@@ -214,14 +213,14 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
             "Teman Jalan" to "jalan jalan ceria",
             "Sesi Galau" to "galau melankolis",
         )
-        val prevGenre = _state.value.genreBlock?.name
-        val prevMood = _state.value.moodBlock?.name
+        val prevGenre = _state.value.genreBlocks[tab]?.name
+        val prevMood = _state.value.moodBlocks[tab]?.name
         val genre = genres.filter { it != prevGenre }.random()
         val (moodName, moodQuery) = moods.filter { it.first != prevMood }.random()
 
         _state.value = _state.value.copy(
-            genreBlock = GenreBlock(genre, emptyList(), loading = true),
-            moodBlock = MoodBlock(moodName, emptyList(), loading = true),
+            genreBlocks = _state.value.genreBlocks + (tab to GenreBlock(genre, emptyList(), loading = true)),
+            moodBlocks = _state.value.moodBlocks + (tab to MoodBlock(moodName, emptyList(), loading = true)),
         )
         viewModelScope.launch {
             // One source each: these are background rows, and YouTube Music already has both.
@@ -232,15 +231,15 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
             }
             val (g, m) = res
             _state.value = _state.value.copy(
-                genreBlock = GenreBlock(genre, g, loading = false),
-                moodBlock = MoodBlock(moodName, m, loading = false),
+                genreBlocks = _state.value.genreBlocks + (tab to GenreBlock(genre, g, loading = false)),
+                moodBlocks = _state.value.moodBlocks + (tab to MoodBlock(moodName, m, loading = false)),
             )
         }
     }
 
     fun loadHome() {
         if (_state.value.loading) return
-        if (_state.value.genreBlock == null) loadRotatingBlocks()
+        if (_state.value.genreBlocks[Tab.HOME] == null) loadRotatingBlocks(Tab.HOME)
         _state.value = _state.value.copy(loading = true, error = null)
         viewModelScope.launch {
             // Shelves and track rows are independent; fetch them together so the screen does not
@@ -260,7 +259,8 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun loadForYou() {
-        loadRotatingBlocks()
+        // Its own pair: a shared pair would put Home's genre row on For You too.
+        if (_state.value.genreBlocks[Tab.FOR_YOU] == null) loadRotatingBlocks(Tab.FOR_YOU)
         viewModelScope.launch {
             // Personal first: seed radio from the tracks actually played, then fall back to the
             // generic Explore page when there is no history yet.

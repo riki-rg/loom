@@ -93,6 +93,14 @@ fun LyricsScreen(
             modifier = Modifier.fillMaxSize().blur(90.dp).graphicsLayer { alpha = 0.30f },
         )
         Box(Modifier.fillMaxSize().background(ambientBrush(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.secondary)))
+        // A second, darker wash over the ambient gradient. Lyrics are the content here, so the
+        // background has to lose contrast, not win it: without this, bright artwork left the
+        // dimmed lines at ~2:1 against the page.
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.34f)),
+        )
 
         Column(
             Modifier
@@ -168,13 +176,12 @@ fun LyricsScreen(
                         val on = i == active
                         Text(
                             lines[i].text,
-                            style = MaterialTheme.typography.headlineMedium,
+                            // Scales down on narrow screens instead of clipping a long line.
+                            style = MaterialTheme.typography.headlineSmall,
                             fontWeight = if (on) FontWeight.Bold else FontWeight.Medium,
-                            color = if (on) {
-                                MaterialTheme.colorScheme.onSurface
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
-                            },
+                            // White on the dark wash: the sung line is full strength, the rest
+                            // step back without dropping below readable contrast.
+                            color = if (on) Color.White else Color.White.copy(alpha = 0.52f),
                             modifier = Modifier.fillMaxWidth().padding(vertical = 9.dp),
                         )
                     }
@@ -226,12 +233,17 @@ fun LyricsScreen(
  * than a progress bar.
  */
 @Composable
-fun RhythmBars(positionMs: Long, playing: Boolean, modifier: Modifier = Modifier) {
+fun RhythmBars(
+    positionMs: Long,
+    playing: Boolean,
+    modifier: Modifier = Modifier,
+    count: Int = 32,
+    gap: androidx.compose.ui.unit.Dp = 3.dp,
+) {
     val t = positionMs / 1000f
-    val count = 32
     Row(
         modifier,
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(gap),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         repeat(count) { i ->

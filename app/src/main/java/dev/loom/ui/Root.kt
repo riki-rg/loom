@@ -254,14 +254,31 @@ fun Root(vm: LoomViewModel) {
                     )
                 }
             }
-            NowPlayingPill(
-                state = state,
-                haze = haze,
-                progress = if (position.second > 0) position.first.toFloat() / position.second else 0f,
-                onToggle = vm::togglePlay,
-                onSkip = vm::skip,
-            ) { vm.openPlayer() }
             FloatingNav(state.tab, haze) { vm.setTab(it) }
+        }
+
+        // Dynamic Island: only while something is loaded, and never over the player or lyrics,
+        // which are full surfaces of their own.
+        val now = state.current
+        AnimatedVisibility(
+            visible = now != null && !state.openPlayer && !state.lyricsFull,
+            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 6.dp),
+            enter = slideInVertically(tween(280)) { -it } + fadeIn(tween(200)),
+            exit = slideOutVertically(tween(220)) { -it } + fadeOut(tween(140)),
+        ) {
+            now?.let { t ->
+                DynamicIsland(
+                    track = t,
+                    playing = state.playing,
+                    resolving = state.resolving,
+                    positionMs = position.first,
+                    durationMs = position.second,
+                    haze = haze,
+                    onToggle = vm::togglePlay,
+                    onSkip = vm::skip,
+                    onOpenLyrics = { vm.openLyrics() },
+                )
+            }
         }
 
         // Full player slides over everything, including the nav.
@@ -458,7 +475,7 @@ private fun HomeScreen(
     onPlay: (Track, List<Track>) -> Unit,
     onLike: (Track) -> Unit,
     onMenu: (Track) -> Unit,
-    onRefresh: () -> Unit,
+    onRefresh: (Tab) -> Unit,
 ) {
     when {
         state.loading && state.shelves.isEmpty() -> CenterSpinner()
@@ -466,7 +483,7 @@ private fun HomeScreen(
             EmptyState("Nothing to show", "Could not reach YouTube Music.")
         else -> LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 190.dp)) {
             item { BrandHeader("Loom", "Home") }
-            feed(state, onOpen, onPlay, onLike, onMenu, onRefresh = { onRefresh() })
+            feed(state, personal = false, onOpen, onPlay, onLike, onMenu, onRefresh = { onRefresh(Tab.HOME) })
         }
     }
 }
@@ -481,7 +498,7 @@ private fun CommunityPlaylists(title: String, items: List<Collection>, onOpen: (
             contentPadding = PaddingValues(horizontal = 18.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            items(items.take(10), key = { it.id }) { c -> CollectionCard(c) { onOpen(c) } }
+            items(items.take(10), key = { it.id }) { c -> CollectionCard(c, { onOpen(c) }) }
         }
     }
 }
@@ -543,14 +560,18 @@ private fun MoodHeader(name: String, loading: Boolean, onRefresh: () -> Unit) {
  */
 private fun androidx.compose.foundation.lazy.LazyListScope.feed(
     state: UiState,
+    personal: Boolean,
     onOpen: (Collection) -> Unit,
     onPlay: (Track, List<Track>) -> Unit,
     onLike: (Track) -> Unit,
     onMenu: (Track) -> Unit,
-    onRefresh: () -> Unit,
+    onRefresh: (Tab) -> Unit,
 ) {
-    // Three rows, not a long list: the user's ask, and it keeps the page one screen tall.
-    val top = (state.forYouTracks.ifEmpty { state.topTracks }).take(3)
+    // No cross-tab fallback: Home reads the charts, For You reads the personal radio. Borrowing
+    // the other tab's list when one is empty is what made both pages show the same songs.
+    val homeIds = state.topTracks.map { it.source.name + it.id }.toSet()
+    val top = (if (personal) state.forYouTracks.filterNot { it.source.name + it.id in homeIds } else state.topTracks)
+        .take(3)
     if (top.isNotEmpty()) {
         itemsIndexed(top, key = { _, t -> "ft" + t.id }) { i, t ->
             NumberedTrackRow(
@@ -563,7 +584,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.feed(
 
     // One carousel, then the community covers. Two carousels pushed the genre and mood blocks
     // below two screens, and the user asked not to scroll far.
-    val shelves = state.shelves.ifEmpty { state.forYou }
+    val shelves = if (personal) state.forYou else state.shelves
     val carousel = shelves.firstOrNull { it.kind != "playlists" } ?: shelves.firstOrNull()
     if (carousel != null) {
         item { ShelfRow(carousel.title, carousel.items, carousel.kind, onOpen) }
@@ -575,33 +596,83 @@ private fun androidx.compose.foundation.lazy.LazyListScope.feed(
         item { CommunityPlaylists(community.title, community.items, onOpen) }
     }
 
-    // Rotating genre block. Refresh is on the header, so the user can reroll without leaving.
-    state.genreBlock?.let { block ->
-        item { RotatingHeader(block.name, block.loading, onRefresh) }
-        if (block.loading) {
-            item { TrackSkeleton(rows = 3) }
-        } else {
-            itemsIndexed(block.tracks.take(3), key = { _, t -> "gt" + t.id }) { i, t ->
-                NumberedTrackRow(
-                    i + 1, t, state.current?.id == t.id,
-                    liked = state.liked.any { it.id == t.id && it.source == t.source },
-                    onPlay = { onPlay(t, block.tracks) }, onLike = { onLike(t) }, onMenu = { onMenu(t) },
-                )
-            }
+    // Rotating genre block: a horizontal carousel, so it costs one row of height instead of three
+    // and gives the page the sideways scroll it was missing.
+    (if (personal) state.genreBlocks[Tab.FOR_YOU] else state.genreBlocks[Tab.HOME])?.let { block ->
+        item { RotatingHeader(block.name, block.loading) { onRefresh(if (personal) Tab.FOR_YOU else Tab.HOME) } }
+        item {
+            TrackCarousel(block.tracks, block.loading, state, onPlay, onLike, onMenu)
         }
     }
 
     // Rotating mood block: "Rain + Feels" is only one of six, and it changes on refresh.
-    state.moodBlock?.let { block ->
-        item { MoodHeader(block.name, block.loading, onRefresh) }
-        if (block.loading) {
-            item { TrackSkeleton(rows = 3) }
-        } else {
-            itemsIndexed(block.tracks.take(3), key = { _, t -> "mt" + t.id }) { i, t ->
-                NumberedTrackRow(
-                    i + 1, t, state.current?.id == t.id,
-                    liked = state.liked.any { it.id == t.id && it.source == t.source },
-                    onPlay = { onPlay(t, block.tracks) }, onLike = { onLike(t) }, onMenu = { onMenu(t) },
+    (if (personal) state.moodBlocks[Tab.FOR_YOU] else state.moodBlocks[Tab.HOME])?.let { block ->
+        item { MoodHeader(block.name, block.loading) { onRefresh(if (personal) Tab.FOR_YOU else Tab.HOME) } }
+        item {
+            TrackCarousel(block.tracks, block.loading, state, onPlay, onLike, onMenu)
+        }
+    }
+}
+
+/**
+ * Compact horizontal track row for the rotating blocks: artwork, title, artist. Tapping plays, the
+ * three-dot opens the same sheet as everywhere else.
+ */
+@Composable
+private fun TrackCarousel(
+    tracks: List<Track>,
+    loading: Boolean,
+    state: UiState,
+    onPlay: (Track, List<Track>) -> Unit,
+    onLike: (Track) -> Unit,
+    onMenu: (Track) -> Unit,
+) {
+    if (loading) {
+        // Three grey cards, the same footprint as a loaded row, so nothing jumps.
+        Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 4.dp)) {
+            repeat(3) {
+                Box(
+                    Modifier
+                        .padding(end = 12.dp)
+                        .size(132.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)),
+                )
+            }
+        }
+        return
+    }
+    if (tracks.isEmpty()) return
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = 18.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        items(tracks, key = { it.source.name + it.id }) { t ->
+            Column(
+                Modifier
+                    .width(132.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable { onPlay(t, tracks) },
+            ) {
+                AsyncImage(
+                    model = t.art,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(132.dp).clip(RoundedCornerShape(16.dp)),
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    t.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    t.artist.ifBlank { t.source.label },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
@@ -615,7 +686,7 @@ private fun ForYouScreen(
     onPlay: (Track, List<Track>) -> Unit,
     onLike: (Track) -> Unit,
     onMenu: (Track) -> Unit,
-    onRefresh: () -> Unit,
+    onRefresh: (Tab) -> Unit,
 ) {
     if (state.forYou.isEmpty() && state.forYouTracks.isEmpty()) {
         CenterSpinner()
@@ -625,7 +696,7 @@ private fun ForYouScreen(
     // lead because the feed takes `forYouTracks` first.
     LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 190.dp)) {
         item { BrandHeader("For You", "For you today · built from what you listen to") }
-        feed(state, onOpen, onPlay, onLike, onMenu, onRefresh)
+        feed(state, personal = true, onOpen, onPlay, onLike, onMenu, onRefresh = { onRefresh(Tab.FOR_YOU) })
     }
 }
 
@@ -733,7 +804,17 @@ private fun QueueScreen(
                 if (state.saved.isNotEmpty()) {
                     item { Spacer(Modifier.height(18.dp)) }
                     item { SectionTitle("Saved from Home", state.saved.size) }
-                    items(state.saved, key = { "s" + it.id }) { c -> CollectionCard(c) { onOpen(c) } }
+                    // Two per row: these are square cards, and one per row wasted the width.
+                    // chunked rows instead of a nested LazyVerticalGrid, which would fight the
+                    // parent list for scrolling.
+                    items(state.saved.chunked(2), key = { row -> "s" + row.first().id }) { row ->
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                            row.forEach { c ->
+                                Box(Modifier.weight(1f)) { CollectionCard(c, { onOpen(c) }, fillWidth = true) }
+                            }
+                            if (row.size == 1) Box(Modifier.weight(1f))
+                        }
+                    }
                 }
             }
             Lib.HISTORY -> if (state.history.isEmpty()) {

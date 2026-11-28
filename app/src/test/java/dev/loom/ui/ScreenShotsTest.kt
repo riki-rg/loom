@@ -322,4 +322,54 @@ class ScreenShotsTest {
             }
         }
     }
+
+    /** The island: black capsule, disc, title, time and beat, at the real width. */
+    @Test
+    fun dynamicIsland() = shoot("dynamic-island") {
+        Column(Modifier.fillMaxSize().padding(vertical = 8.dp)) {
+            DynamicIsland(
+                track = track,
+                playing = true,
+                resolving = false,
+                positionMs = 83_000,
+                durationMs = 214_000,
+                haze = dev.chrisbanes.haze.HazeState(),
+                onToggle = {},
+                onSkip = {},
+                onOpenLyrics = {},
+            )
+            Spacer(Modifier.height(14.dp))
+            Text("paused state", style = MaterialTheme.typography.labelMedium)
+            Spacer(Modifier.height(6.dp))
+            DynamicIsland(
+                track = track,
+                playing = false,
+                resolving = false,
+                positionMs = 5_000,
+                durationMs = 214_000,
+                haze = dev.chrisbanes.haze.HazeState(),
+                onToggle = {},
+                onSkip = {},
+                onOpenLyrics = {},
+            )
+        }
+    }
+
+    /** Two saved cards per row, each filling half the width. */
+    @Test
+    fun savedGridTwoPerRow() = shoot("saved-grid") {
+        Column(Modifier.fillMaxSize().padding(top = 24.dp)) {
+            val items = List(3) { i ->
+                dev.loom.core.Collection("VL$i", "", "Playlist ${i + 1}", "Komunitas", "", "playlist")
+            }
+            items.chunked(2).forEach { row ->
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                    row.forEach { c ->
+                        Box(Modifier.weight(1f)) { CollectionCard(c, {}, fillWidth = true) }
+                    }
+                    if (row.size == 1) Box(Modifier.weight(1f))
+                }
+            }
+        }
+    }
 }

@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -24,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.RemoveCircleOutline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -119,32 +121,43 @@ fun SectionTitle(text: String, count: Int = 0, modifier: Modifier = Modifier) {
 
 /** Square playlist card for the horizontal shelves. */
 @Composable
-fun CollectionCard(c: Collection, onClick: () -> Unit) {
+fun CollectionCard(c: Collection, onClick: () -> Unit, fillWidth: Boolean = false) {
     // Press feedback only: a small scale and dim, no looping motion.
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(if (pressed) 0.965f else 1f, spring(stiffness = 700f), label = "card")
+    val cover: Modifier = when {
+        c.kind == "track" -> Modifier.width(196.dp).height(110.dp)
+        fillWidth -> Modifier.fillMaxWidth().aspectRatio(1f)
+        else -> Modifier.size(148.dp)
+    }
+    val coverShape = RoundedCornerShape(if (c.kind == "track") 14.dp else 20.dp)
     Column(
         Modifier
-            .width(if (c.kind == "track") 200.dp else 152.dp)
+            .then(if (fillWidth) Modifier.fillMaxWidth() else Modifier.width(if (c.kind == "track") 200.dp else 152.dp))
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .padding(2.dp),
     ) {
-        Box {
+        Box(cover.clip(coverShape).background(MaterialTheme.colorScheme.surfaceVariant)) {
+            if (c.art.isBlank()) {
+                Icon(
+                    Icons.Rounded.QueueMusic,
+                    contentDescription = null,
+                    modifier = Modifier.align(Alignment.Center).size(34.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                )
+            }
             AsyncImage(
                 model = c.art,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .then(if (c.kind == "track") Modifier.width(196.dp).height(110.dp) else Modifier.size(148.dp))
-                    .clip(RoundedCornerShape(if (c.kind == "track") 14.dp else 20.dp)),
+                modifier = cover.then(Modifier.clip(coverShape)),
             )
             // Scrim only where text could sit; never a full-frame overlay.
             Box(
-                Modifier
-                    .then(if (c.kind == "track") Modifier.width(196.dp).height(110.dp) else Modifier.size(148.dp))
-                    .clip(RoundedCornerShape(if (c.kind == "track") 14.dp else 20.dp))
+                cover
+                    .clip(coverShape)
                     .background(
                         Brush.verticalGradient(
                             0.6f to Color.Transparent,
@@ -227,7 +240,7 @@ fun ShelfRow(
                 contentPadding = PaddingValues(horizontal = 18.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                items(items, key = { it.id }) { c -> CollectionCard(c) { onOpen(c) } }
+                items(items, key = { it.id }) { c -> CollectionCard(c, { onOpen(c) }) }
             }
         }
     }
