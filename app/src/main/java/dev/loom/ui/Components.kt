@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.RemoveCircleOutline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -169,16 +170,65 @@ fun CollectionCard(c: Collection, onClick: () -> Unit) {
     }
 }
 
+/**
+ * One feed shelf. The shape follows `kind` so the page is not a stack of identical carousels:
+ * track shelves draw a short list of playable rows, everything else keeps the cover carousel.
+ *
+ * Track shelves are capped at [maxRows] — the full list is one tap away on the detail page, and a
+ * feed that never ends is a feed nobody scrolls.
+ */
 @Composable
-fun ShelfRow(title: String, items: List<Collection>, onOpen: (Collection) -> Unit) {
+fun ShelfRow(
+    title: String,
+    items: List<Collection>,
+    kind: String,
+    onOpen: (Collection) -> Unit,
+    maxRows: Int = 4,
+) {
     if (items.isEmpty()) return
     Column(Modifier.padding(bottom = 18.dp)) {
         SectionTitle(title, items.size)
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 18.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            items(items, key = { it.id }) { c -> CollectionCard(c) { onOpen(c) } }
+        if (kind == "tracks") {
+            items.take(maxRows).forEach { c ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { onOpen(c) }
+                        .padding(horizontal = 18.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AsyncImage(
+                        model = c.art,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.size(48.dp).clip(RoundedCornerShape(10.dp)),
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(c.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            c.subtitle,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Icon(
+                        Icons.Rounded.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+        } else {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 18.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                items(items, key = { it.id }) { c -> CollectionCard(c) { onOpen(c) } }
+            }
         }
     }
 }

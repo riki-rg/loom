@@ -225,6 +225,7 @@ fun Root(vm: LoomViewModel) {
                             vm::clearQueries,
                             vm::openSearch,
                             vm::closeSearch,
+                            vm::openGenre,
                         )
                         Tab.SETTINGS -> SettingsScreen(vm, theme)
                     }
@@ -446,7 +447,9 @@ private fun HomeScreen(
             EmptyState("Nothing to show", "Could not reach YouTube Music.")
         else -> LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 190.dp)) {
             item { BrandHeader("Loom", "Home") }
-            items(state.shelves, key = { "hs" + it.title }) { shelf -> ShelfRow(shelf.title, shelf.items, onOpen) }
+            items(state.shelves, key = { "hs" + it.title }) { shelf ->
+                ShelfRow(shelf.title, shelf.items, shelf.kind, onOpen)
+            }
         }
     }
 }
@@ -482,7 +485,9 @@ private fun ForYouScreen(
                 NumberedTrackRow(i + 1, t, state.current?.id == t.id, liked = state.liked.any { it.id == t.id && it.source == t.source }, onPlay = { onPlay(t, state.forYouTracks) }, onLike = { onLike(t) }, onMenu = { onMenu(t) })
             }
         }
-        items(state.forYou, key = { "fs" + it.title }) { shelf -> ShelfRow(shelf.title, shelf.items, onOpen) }
+        items(state.forYou, key = { "fs" + it.title }) { shelf ->
+            ShelfRow(shelf.title, shelf.items, shelf.kind, onOpen)
+        }
         // Moved off Home: the mix is a recommendation, and 12 rows keep the tab quick to open.
         if (state.topTracks.isNotEmpty()) {
             val mix = state.topTracks.take(12)
@@ -1367,6 +1372,7 @@ private fun SearchScreen(
     onClearQueries: () -> Unit,
     onOpen: () -> Unit,
     onClose: () -> Unit,
+    onGenre: (String) -> Unit,
 ) {
     if (state.searchOpen) {
         SearchPage(state, onQuery, onSearch, onPlayQuery, onPlay, onLike, onRemoveQuery, onClose)
@@ -1415,7 +1421,7 @@ private fun SearchScreen(
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 3.dp)
                     .clip(RoundedCornerShape(16.dp))
-                    .clickable { onPlayQuery(g) }
+                    .clickable { onGenre(g) }
                     .padding(horizontal = 14.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {

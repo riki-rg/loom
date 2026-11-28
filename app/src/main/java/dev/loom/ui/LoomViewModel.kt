@@ -125,7 +125,7 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
 
     init { observeDownloads() }
 
-    private val _theme = MutableStateFlow(ThemeState())
+    private val _theme = MutableStateFlow(store.theme)
     val theme: StateFlow<ThemeState> = _theme.asStateFlow()
 
     /** Called by the UI when a stream resolves; the player lives in PlaybackService. */
@@ -353,6 +353,31 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
     fun playQuery(q: String) {
         _state.value = _state.value.copy(query = q)
         search()
+    }
+
+    /**
+     * A genre tap opens a real page with a grey skeleton, rather than reusing the search tab: the
+     * user sees where they are going while the four sources answer.
+     */
+    fun openGenre(genre: String) {
+        val tab = _state.value.tab
+        _state.value = _state.value.copy(
+            openPlaylist = _state.value.openPlaylist + (tab to OpenPlaylist(genre, emptyList())),
+            searchOpen = false,
+            loading = true,
+            error = null,
+        )
+        viewModelScope.launch {
+            val merged = withContext(Dispatchers.IO) {
+                Source.entries.map { s -> async { runCatching { Music.search(genre, s) }.getOrDefault(emptyList()) } }
+                    .awaitAll()
+            }.flatten().distinctBy { it.source.name + it.id }
+            _state.value = _state.value.copy(
+                openPlaylist = _state.value.openPlaylist + (tab to OpenPlaylist(genre, merged)),
+                loading = false,
+                error = if (merged.isEmpty()) "Tidak ada hasil untuk \"$genre\"" else null,
+            )
+        }
     }
 
     fun removeQuery(q: String) {
@@ -792,7 +817,14 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun setPalette(p: Palette) { _theme.value = _theme.value.copy(palette = p, customSeed = null) }
-    fun setMode(m: Mode) { _theme.value = _theme.value.copy(mode = m) }
-    fun setCustomSeed(seed: Long?) { _theme.value = _theme.value.copy(customSeed = seed) }
+    // Every theme change is written through, so a restart keeps the look. Three small fields in
+    // the same preferences file the app already owns; no schema, no migration.
+    private fun saveTheme(t: ThemeState) {
+        store.theme = t
+        _theme.value = t
+    }
+
+    fun setPalette(p: Palette) { saveTheme(_theme.value.copy(palette = p, customSeed = null)) }
+    fun setMode(m: Mode) { saveTheme(_theme.value.copy(mode = m)) }
+    fun setCustomSeed(seed: Long?) { saveTheme(_theme.value.copy(customSeed = seed)) }
 }

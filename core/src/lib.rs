@@ -237,7 +237,7 @@ fn yt_home() -> Result<Value, String> {
     let res = yt_browse("FEmusic_home", None)?;
     let mut shelves = Vec::new();
     collect_shelves(&res, &mut shelves);
-    Ok(json!(shelves))
+    Ok(json!(interleave(shelves)))
 }
 
 /// A flat list of playable tracks for the home screen. `FEmusic_home` only carries cards, so the
@@ -259,6 +259,24 @@ fn yt_top_tracks() -> Result<Value, String> {
     Ok(json!(out))
 }
 
+/// Kind of a shelf, inferred from its cards. The UI uses it to alternate row shapes instead of
+/// stacking identical carousels, which is what made Home read as one long monotone list.
+fn shelf_kind(items: &[Value]) -> &'static str {
+    let tracks = items.iter().filter(|i| i["kind"] == "track").count();
+    if tracks * 2 >= items.len() && tracks > 0 {
+        return "tracks";
+    }
+    let playlists = items
+        .iter()
+        .filter(|i| i["kind"] == "playlist" && i["id"].as_str().map(|s| s.starts_with("VL")).unwrap_or(false))
+        .count();
+    // `playlists > 0` matters: without it an empty shelf satisfies `0 >= 0` and reports playlists.
+    if playlists > 0 && playlists * 2 >= items.len() {
+        return "playlists";
+    }
+    "cards"
+}
+
 fn collect_shelves(v: &Value, out: &mut Vec<Value>) {
     match v {
         Value::Object(map) => {
@@ -276,7 +294,8 @@ fn collect_shelves(v: &Value, out: &mut Vec<Value>) {
                     }
                 }
                 if !items.is_empty() {
-                    out.push(json!({"title": title, "items": items}));
+                    let kind = shelf_kind(&items);
+                    out.push(json!({"title": title, "items": items, "kind": kind}));
                 }
             }
             for (_, child) in map {
@@ -286,6 +305,24 @@ fn collect_shelves(v: &Value, out: &mut Vec<Value>) {
         Value::Array(arr) => arr.iter().for_each(|c| collect_shelves(c, out)),
         _ => {}
     }
+}
+
+/// Alternates the feed: no two neighbouring shelves share a shape, so the page reads as
+/// track rows, then a card carousel, then rows again — the rhythm YouTube Music has.
+///
+/// `shortcut:` greedy reorder, not a solver. With few distinct shapes it cannot fully alternate,
+/// which is fine — the goal is to break up long runs, not to produce a perfect pattern.
+fn interleave(mut shelves: Vec<Value>) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::with_capacity(shelves.len());
+    while !shelves.is_empty() {
+        let prev = out.last().map(|s| s["kind"].as_str().unwrap_or("")).unwrap_or("");
+        let pick = shelves
+            .iter()
+            .position(|s| s["kind"].as_str().unwrap_or("") != prev)
+            .unwrap_or(0);
+        out.push(shelves.remove(pick));
+    }
+    out
 }
 
 /// A carousel card: playlist, album, or a video. `kind` says how to open it.
@@ -402,7 +439,7 @@ fn yt_for_you() -> Result<Value, String> {
     if shelves.is_empty() {
         return Err("for you: no shelves".into());
     }
-    Ok(json!(shelves))
+    Ok(json!(interleave(shelves)))
 }
 
 /// Autoplay radio seeded by a track: YouTube builds a 50-item queue from its artist and genre.
@@ -1481,6 +1518,44 @@ mod tests {
             Some("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
         );
         assert_eq!(extract_client_id("client_id=\"zz\"&x=1"), None);
+    }
+
+    fn shelf(kind: &str) -> Value {
+        json!({"title": kind, "items": [{"id": "x"}], "kind": kind})
+    }
+
+    #[test]
+    fn shelf_kind_follows_the_majority_card() {
+        let track = json!({"id": "v", "kind": "track"});
+        let playlist = json!({"id": "VLx", "kind": "playlist"});
+        let album = json!({"id": "MPREb", "kind": "playlist"});
+        assert_eq!(shelf_kind(&[track.clone(), track.clone()]), "tracks");
+        assert_eq!(shelf_kind(&[playlist.clone(), playlist.clone()]), "playlists");
+        // An album id is not a VL playlist, so a shelf of albums stays a card carousel.
+        assert_eq!(shelf_kind(&[album.clone(), album.clone()]), "cards");
+        assert_eq!(shelf_kind(&[]), "cards");
+    }
+
+    #[test]
+    fn interleave_breaks_up_runs_of_the_same_shape() {
+        let feed = vec![
+            shelf("cards"), shelf("cards"), shelf("cards"),
+            shelf("tracks"), shelf("tracks"),
+            shelf("playlists"),
+        ];
+        let out = interleave(feed);
+        assert_eq!(out.len(), 6, "interleave must not drop shelves");
+        // No two neighbours share a kind: that is the whole point of the reorder.
+        for w in out.windows(2) {
+            assert_ne!(w[0]["kind"], w[1]["kind"], "adjacent shelves: {w:?}");
+        }
+    }
+
+    #[test]
+    fn interleave_keeps_every_shelf_when_shapes_run_out() {
+        let feed = vec![shelf("cards"), shelf("cards"), shelf("cards")];
+        let out = interleave(feed);
+        assert_eq!(out.len(), 3);
     }
 
     #[test]

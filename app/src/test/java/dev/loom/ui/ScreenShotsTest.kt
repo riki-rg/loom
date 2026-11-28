@@ -250,4 +250,50 @@ class ScreenShotsTest {
             Text("42% · 1.9 MB / 4.5 MB · 820 KB/s · sisa 4 dtk", style = MaterialTheme.typography.bodySmall)
         }
     }
+
+    /** The feed rhythm: a track shelf must draw rows, a playlist shelf must draw covers. */
+    @Test
+    fun feedAlternatesShapes() = shoot("feed-alternating") {
+        Column(Modifier.fillMaxSize()) {
+            ShelfRow(
+                title = "Trending sekarang",
+                kind = "tracks",
+                onOpen = {},
+                items = List(4) { i ->
+                    dev.loom.core.Collection(
+                        id = "v$i",
+                        params = "",
+                        title = "Lagu ${i + 1}",
+                        subtitle = "Artis ${i + 1} · 143 jt pemutaran",
+                        art = "",
+                        kind = "track",
+                    )
+                },
+            )
+            ShelfRow(
+                title = "Playlist trending komunitas",
+                kind = "playlists",
+                onOpen = {},
+                items = List(4) { i ->
+                    dev.loom.core.Collection(
+                        id = "VL$i",
+                        params = "",
+                        title = "Playlist ${i + 1}",
+                        subtitle = "Komunitas",
+                        art = "",
+                        kind = "playlist",
+                    )
+                },
+            )
+        }
+    }
+
+    /** Genre rows must show a grey skeleton while the sources answer, not an empty page. */
+    @Test
+    fun genreLoadingSkeleton() = shoot("genre-skeleton") {
+        Column(Modifier.fillMaxSize()) {
+            Text("Dangdut", style = MaterialTheme.typography.displaySmall, modifier = Modifier.padding(20.dp))
+            TrackSkeleton()
+        }
+    }
 }

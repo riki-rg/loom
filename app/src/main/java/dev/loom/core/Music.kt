@@ -106,7 +106,12 @@ private fun collectionsOf(arr: JSONArray): List<Collection> =
     }
 
 /** Home feed as shelves of collection cards. */
-data class Shelf(val title: String, val items: List<Collection>)
+data class Shelf(
+    val title: String,
+    val items: List<Collection>,
+    /** "tracks" | "playlists" | "cards" — decides which row shape the feed draws. */
+    val kind: String = "cards",
+)
 
 object Music {
     fun search(query: String, source: Source): List<Track> = when (source) {
@@ -185,7 +190,11 @@ object Music {
         val arr = unwrap(raw) as JSONArray
         return (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
-            Shelf(o.optString("title"), collectionsOf(o.optJSONArray("items") ?: JSONArray()))
+            Shelf(
+                o.optString("title"),
+                collectionsOf(o.optJSONArray("items") ?: JSONArray()),
+                o.optString("kind", "cards"),
+            )
         }
     }
 

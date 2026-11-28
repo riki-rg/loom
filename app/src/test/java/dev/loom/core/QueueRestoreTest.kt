@@ -50,4 +50,38 @@ class QueueRestoreTest {
         assertEquals(0, s.index)
         assertEquals("only", s.current?.id)
     }
+
+    /**
+     * The user's request: the theme they pick must still be there after a restart. Drives the real
+     * ViewModel setters and a fresh ViewModel, which is what relaunching the app does.
+     */
+    @Test
+    fun themeSurvivesColdStart() {
+        val vm = LoomViewModel(app)
+        vm.setPalette(dev.loom.theme.Palette.MAGENTA)
+        vm.setMode(dev.loom.theme.Mode.DARK)
+
+        val restored = LoomViewModel(app).theme.value
+        assertEquals(dev.loom.theme.Palette.MAGENTA, restored.palette)
+        assertEquals(dev.loom.theme.Mode.DARK, restored.mode)
+    }
+
+    /** A custom seed wins over the palette, and must survive too. */
+    @Test
+    fun customSeedSurvivesColdStart() {
+        LoomViewModel(app).setCustomSeed(0xFF123456)
+
+        val restored = LoomViewModel(app).theme.value
+        assertEquals(0xFF123456, restored.customSeed)
+        assertEquals(dev.loom.theme.Palette.COBALT, restored.palette)
+    }
+
+    /** Nothing saved yet must not throw; the defaults stand. */
+    @Test
+    fun freshInstallUsesDefaultTheme() {
+        val t = LoomViewModel(app).theme.value
+        assertEquals(dev.loom.theme.Palette.COBALT, t.palette)
+        assertEquals(dev.loom.theme.Mode.LIGHT, t.mode)
+        assertNull(t.customSeed)
+    }
 }

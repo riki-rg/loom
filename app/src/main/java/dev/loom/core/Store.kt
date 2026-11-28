@@ -46,6 +46,26 @@ class Store(ctx: Context) {
     private fun write(key: String, items: List<JSONObject>) =
         p.edit().putString(key, JSONArray(items).toString()).apply()
 
+    /**
+     * The chosen look. Stored as three primitives rather than a JSON blob: it is small, and a
+     * missing key must fall back to the default instead of throwing.
+     */
+    var theme: dev.loom.theme.ThemeState
+        get() = dev.loom.theme.ThemeState(
+            palette = runCatching {
+                dev.loom.theme.Palette.valueOf(p.getString("theme_palette", null) ?: "")
+            }.getOrDefault(dev.loom.theme.Palette.COBALT),
+            mode = runCatching {
+                dev.loom.theme.Mode.valueOf(p.getString("theme_mode", null) ?: "")
+            }.getOrDefault(dev.loom.theme.Mode.LIGHT),
+            customSeed = p.getLong("theme_seed", 0L).takeIf { it != 0L },
+        )
+        set(v) = p.edit()
+            .putString("theme_palette", v.palette.name)
+            .putString("theme_mode", v.mode.name)
+            .putLong("theme_seed", v.customSeed ?: 0L)
+            .apply()
+
     var history: List<Track>
         get() = readTracks("history")
         private set(v) = write("history", v.take(60).map { it.toJson() })
