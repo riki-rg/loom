@@ -758,7 +758,9 @@ fn urlencode(s: &str) -> String {
     out
 }
 
-/// Spotify only exposes a 30s preview anonymously. Read it from the embed page.
+/// Spotify's anonymous playback is a 30s preview. Rather than play that, find the same recording
+/// on YouTube Music and play the full track; the preview stays as the fallback when no confident
+/// match exists, so a Spotify row never ends up silent.
 fn sp_preview(track_id: &str) -> Result<Value, String> {
     let html = http()
         .get(format!("https://open.spotify.com/embed/track/{track_id}"))
@@ -767,8 +769,78 @@ fn sp_preview(track_id: &str) -> Result<Value, String> {
         .map_err(|e| e.to_string())?
         .text()
         .map_err(|e| e.to_string())?;
+
+    if let Some((title, artist)) = sp_meta(&html) {
+        if let Ok(full) = yt_full_for(&title, &artist) {
+            return Ok(full);
+        }
+    }
     let url = extract_preview_url(&html).ok_or("spotify: no preview for this track")?;
     Ok(json!({ "url": url, "mime": "audio/mpeg", "ua": SP_PLAYER_UA, "preview": true }))
+}
+
+/// Title and artist out of the embed page's `__NEXT_DATA__` blob.
+fn sp_meta(html: &str) -> Option<(String, String)> {
+    let data = extract_next_data(html)?;
+    let v: Value = serde_json::from_str(&data).ok()?;
+    let e = v.pointer("/props/pageProps/state/data/entity")?;
+    let title = e.get("name").or_else(|| e.get("title"))?.as_str()?.to_string();
+    let artist = e
+        .get("artists")
+        .and_then(|a| a.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.get("name").and_then(|n| n.as_str()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+    if title.is_empty() { None } else { Some((title, artist)) }
+}
+
+/// Lowercase letters and digits only, so "Song (Remastered)" and "song" compare equal.
+fn norm(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == ' ')
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The best YouTube Music match for a Spotify title/artist, resolved to a playable stream.
+///
+/// `shortcut:` matches on normalised title containment plus artist overlap, which is enough to
+/// pick the studio recording over a cover or live take in the common case. A wrong pick is
+/// possible for remixes and same-titled songs, so the 30s preview remains the fallback.
+fn yt_full_for(title: &str, artist: &str) -> Result<Value, String> {
+    let want_title = norm(title);
+    let want_artist = norm(artist);
+    let q = if artist.is_empty() { title.to_string() } else { format!("{title} {artist}") };
+    let hits = yt_search(&q)?;
+    let best = hits
+        .as_array()
+        .map(|a| a.as_slice())
+        .unwrap_or(&[])
+        .iter()
+        .find(|h| {
+            if h.get("kind").and_then(|k| k.as_str()) != Some("track") {
+                return false;
+            }
+            let ht = norm(h.get("title").and_then(|t| t.as_str()).unwrap_or(""));
+            let ha = norm(h.get("artist").and_then(|t| t.as_str()).unwrap_or(""));
+            let title_ok = ht.contains(&want_title) || want_title.contains(&ht);
+            // An empty artist on either side cannot be judged, so the title alone decides.
+            let artist_ok = want_artist.is_empty() || ha.is_empty() || ha.contains(&want_artist) || want_artist.contains(&ha);
+            !ht.is_empty() && title_ok && artist_ok
+        })
+        .ok_or("spotify: no youtube match")?;
+    let id = best.get("id").and_then(|i| i.as_str()).ok_or("spotify: match has no id")?;
+    let mut stream = yt_stream(id)?;
+    // Full playback, so the UI must not label this row as a preview.
+    stream["preview"] = json!(false);
+    Ok(stream)
 }
 
 fn extract_preview_url(html: &str) -> Option<String> {
@@ -1412,6 +1484,13 @@ mod tests {
     }
 
     #[test]
+    fn norm_ignores_case_punctuation_and_spacing() {
+        assert_eq!(norm("Satu Bulan (Official Lyric Video)"), "satu bulan official lyric video");
+        assert_eq!(norm("  SATU   bulan  "), "satu bulan");
+        assert_eq!(norm("Bernadya"), "bernadya");
+    }
+
+    #[test]
     fn preview_url_extracted_from_embed_html() {
         let html = r#"<script>{"audioPreview":{"url":"https://p.scdn.co/mp3-preview/abc123"}}"</script>"#;
         assert_eq!(
@@ -1516,6 +1595,19 @@ mod tests {
         for t in arr.iter().take(4) {
             println!("   {} — {}", t["title"], t["artist"]);
         }
+    }
+
+    /// The user's complaint: Spotify rows played 30 seconds. Proves a real Spotify track now
+    /// resolves to a full-length YouTube Music stream, and that the preview is only the fallback.
+    #[test]
+    #[ignore]
+    fn live_spotify_resolves_full_length() {
+        let id = "4cOdK2wGLETKBW3PvgPWqT"; // Never Gonna Give You Up — Rick Astley
+        let out = sp_preview(id).expect("resolve");
+        println!("resolved: {out}");
+        assert_eq!(out["preview"], json!(false), "still a 30s preview");
+        let url = out["url"].as_str().unwrap();
+        assert!(!url.contains("p.scdn.co"), "still pointing at the Spotify preview CDN");
     }
 
     #[test]
