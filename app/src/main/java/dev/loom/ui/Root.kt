@@ -5,6 +5,7 @@ import android.content.Intent
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PlayCircle
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.RemoveCircleOutline
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -40,6 +41,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -191,8 +193,8 @@ fun Root(vm: LoomViewModel) {
                         label = "tab",
                     ) { tab ->
                     when (tab) {
-                        Tab.HOME -> HomeScreen(state, vm::openCollection, vm::play, vm::toggleLike, vm::openMenu)
-                        Tab.FOR_YOU -> ForYouScreen(state, vm::openCollection, vm::play, vm::toggleLike, vm::openMenu)
+                        Tab.HOME -> HomeScreen(state, vm::openCollection, vm::play, vm::toggleLike, vm::openMenu, vm::loadRotatingBlocks)
+                        Tab.FOR_YOU -> ForYouScreen(state, vm::openCollection, vm::play, vm::toggleLike, vm::openMenu, vm::loadRotatingBlocks)
                         Tab.PLAYLIST -> {
                             val imp by vm.importing.collectAsState()
                             QueueScreen(
@@ -204,6 +206,7 @@ fun Root(vm: LoomViewModel) {
                                 vm::playQuery,
                                 vm::createPlaylist,
                                 vm::removePlaylist,
+                                vm::setPlaylistIcon,
                                 vm::openLocal,
                                 imp,
                                 vm::setImportSource,
@@ -303,6 +306,8 @@ fun Root(vm: LoomViewModel) {
         val menu by vm.menuTrack.collectAsState()
         // Set when "Buat playlist baru" is tapped: the track waiting for a new home.
         var newPl by remember { mutableStateOf<Track?>(null) }
+        // The track waiting for a destination playlist; non-null while the picker page is open.
+        var pickFor by remember { mutableStateOf<Track?>(null) }
         var dlTrack by remember { mutableStateOf<Track?>(null) }
         var newPlName by remember { mutableStateOf("") }
         menu?.let { t ->
@@ -315,7 +320,7 @@ fun Root(vm: LoomViewModel) {
                 onPlayNext = { vm.playNext(t) },
                 onQueue = { vm.enqueue(t) },
                 onLike = { vm.toggleLike(t); vm.closeMenu() },
-                onSaveTo = { name -> vm.saveToPlaylist(name, t) },
+                onSaveTo = { vm.closeMenu(); pickFor = t },
                 onCreate = { newPl = t },
                 onShare = {
                     val i = Intent(Intent.ACTION_SEND).apply {
@@ -383,6 +388,19 @@ fun Root(vm: LoomViewModel) {
         )
     }
 
+    pickFor?.let { t ->
+        @OptIn(ExperimentalMaterial3Api::class)
+        ModalBottomSheet(onDismissRequest = { pickFor = null }) {
+            SaveToPlaylistSheet(
+                track = t,
+                playlists = state.playlists.map { it.name },
+                onDismiss = { pickFor = null },
+                onPick = { name -> vm.saveToPlaylist(name, t); pickFor = null },
+                onCreate = { newPl = t; pickFor = null },
+            )
+        }
+    }
+
     newPl?.let { t ->
             AlertDialog(
                 onDismissRequest = { newPl = null; newPlName = "" },
@@ -440,6 +458,7 @@ private fun HomeScreen(
     onPlay: (Track, List<Track>) -> Unit,
     onLike: (Track) -> Unit,
     onMenu: (Track) -> Unit,
+    onRefresh: () -> Unit,
 ) {
     when {
         state.loading && state.shelves.isEmpty() -> CenterSpinner()
@@ -447,8 +466,143 @@ private fun HomeScreen(
             EmptyState("Nothing to show", "Could not reach YouTube Music.")
         else -> LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 190.dp)) {
             item { BrandHeader("Loom", "Home") }
-            items(state.shelves, key = { "hs" + it.title }) { shelf ->
-                ShelfRow(shelf.title, shelf.items, shelf.kind, onOpen)
+            feed(state, onOpen, onPlay, onLike, onMenu, onRefresh = { onRefresh() })
+        }
+    }
+}
+
+/** Community playlists as a plain cover grid: no numbers, no rows, just the artwork. */
+@Composable
+private fun CommunityPlaylists(title: String, items: List<Collection>, onOpen: (Collection) -> Unit) {
+    if (items.isEmpty()) return
+    Column(Modifier.padding(bottom = 18.dp)) {
+        SectionTitle(title, items.size)
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 18.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            items(items.take(10), key = { it.id }) { c -> CollectionCard(c) { onOpen(c) } }
+        }
+    }
+}
+
+/**
+ * Header for a block that rerolls. The refresh icon sits on the header so the user does not have
+ * to hunt for a control, and the label says what will change.
+ */
+@Composable
+private fun RotatingHeader(name: String, loading: Boolean, onRefresh: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Genre pilihan", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(name, style = MaterialTheme.typography.headlineMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        IconButton(onClick = onRefresh, enabled = !loading) {
+            Icon(
+                Icons.Rounded.Refresh,
+                contentDescription = "Ganti genre",
+                modifier = Modifier.size(22.dp),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
+/** Same shape as [RotatingHeader]; the label differs because the block is a mood, not a genre. */
+@Composable
+private fun MoodHeader(name: String, loading: Boolean, onRefresh: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Suasana", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(name, style = MaterialTheme.typography.headlineMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        IconButton(onClick = onRefresh, enabled = !loading) {
+            Icon(
+                Icons.Rounded.Refresh,
+                contentDescription = "Ganti suasana",
+                modifier = Modifier.size(22.dp),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
+/**
+ * The feed both tabs draw: three vertical track rows, then a horizontal carousel, then the
+ * community playlists, then a rotating genre block and a rotating mood block.
+ *
+ * One composable for both tabs keeps the rhythm identical, which is what the user asked for
+ * ("for you today gunakan konsep yang sama"). Order is fixed here rather than taken from the
+ * server: the alternation is a layout decision, not data.
+ */
+private fun androidx.compose.foundation.lazy.LazyListScope.feed(
+    state: UiState,
+    onOpen: (Collection) -> Unit,
+    onPlay: (Track, List<Track>) -> Unit,
+    onLike: (Track) -> Unit,
+    onMenu: (Track) -> Unit,
+    onRefresh: () -> Unit,
+) {
+    // Three rows, not a long list: the user's ask, and it keeps the page one screen tall.
+    val top = (state.forYouTracks.ifEmpty { state.topTracks }).take(3)
+    if (top.isNotEmpty()) {
+        itemsIndexed(top, key = { _, t -> "ft" + t.id }) { i, t ->
+            NumberedTrackRow(
+                i + 1, t, state.current?.id == t.id,
+                liked = state.liked.any { it.id == t.id && it.source == t.source },
+                onPlay = { onPlay(t, top) }, onLike = { onLike(t) }, onMenu = { onMenu(t) },
+            )
+        }
+    }
+
+    // One carousel, then the community covers. Two carousels pushed the genre and mood blocks
+    // below two screens, and the user asked not to scroll far.
+    val shelves = state.shelves.ifEmpty { state.forYou }
+    val carousel = shelves.firstOrNull { it.kind != "playlists" } ?: shelves.firstOrNull()
+    if (carousel != null) {
+        item { ShelfRow(carousel.title, carousel.items, carousel.kind, onOpen) }
+    }
+
+    // Community playlists: covers only, the shape the user pointed at in their screenshot.
+    val community = shelves.firstOrNull { it.kind == "playlists" && it !== carousel }
+    if (community != null) {
+        item { CommunityPlaylists(community.title, community.items, onOpen) }
+    }
+
+    // Rotating genre block. Refresh is on the header, so the user can reroll without leaving.
+    state.genreBlock?.let { block ->
+        item { RotatingHeader(block.name, block.loading, onRefresh) }
+        if (block.loading) {
+            item { TrackSkeleton(rows = 3) }
+        } else {
+            itemsIndexed(block.tracks.take(3), key = { _, t -> "gt" + t.id }) { i, t ->
+                NumberedTrackRow(
+                    i + 1, t, state.current?.id == t.id,
+                    liked = state.liked.any { it.id == t.id && it.source == t.source },
+                    onPlay = { onPlay(t, block.tracks) }, onLike = { onLike(t) }, onMenu = { onMenu(t) },
+                )
+            }
+        }
+    }
+
+    // Rotating mood block: "Rain + Feels" is only one of six, and it changes on refresh.
+    state.moodBlock?.let { block ->
+        item { MoodHeader(block.name, block.loading, onRefresh) }
+        if (block.loading) {
+            item { TrackSkeleton(rows = 3) }
+        } else {
+            itemsIndexed(block.tracks.take(3), key = { _, t -> "mt" + t.id }) { i, t ->
+                NumberedTrackRow(
+                    i + 1, t, state.current?.id == t.id,
+                    liked = state.liked.any { it.id == t.id && it.source == t.source },
+                    onPlay = { onPlay(t, block.tracks) }, onLike = { onLike(t) }, onMenu = { onMenu(t) },
+                )
             }
         }
     }
@@ -461,53 +615,17 @@ private fun ForYouScreen(
     onPlay: (Track, List<Track>) -> Unit,
     onLike: (Track) -> Unit,
     onMenu: (Track) -> Unit,
+    onRefresh: () -> Unit,
 ) {
     if (state.forYou.isEmpty() && state.forYouTracks.isEmpty()) {
         CenterSpinner()
         return
     }
+    // Same feed, same rhythm as Home. "For you today" is the header, and the personal tracks
+    // lead because the feed takes `forYouTracks` first.
     LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 190.dp)) {
-        item { BrandHeader("For You", "Built from what you listen to") }
-        // Personal rows lead: they are the reason this tab exists.
-        if (state.forYouTracks.isNotEmpty()) {
-            item {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("For you today", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
-                    TextButton(onClick = { onPlay(state.forYouTracks.first(), state.forYouTracks) }) {
-                        Text("Putar semua")
-                    }
-                }
-            }
-            itemsIndexed(state.forYouTracks, key = { _, t -> "fy" + t.id }) { i, t ->
-                NumberedTrackRow(i + 1, t, state.current?.id == t.id, liked = state.liked.any { it.id == t.id && it.source == t.source }, onPlay = { onPlay(t, state.forYouTracks) }, onLike = { onLike(t) }, onMenu = { onMenu(t) })
-            }
-        }
-        items(state.forYou, key = { "fs" + it.title }) { shelf ->
-            ShelfRow(shelf.title, shelf.items, shelf.kind, onOpen)
-        }
-        // Moved off Home: the mix is a recommendation, and 12 rows keep the tab quick to open.
-        if (state.topTracks.isNotEmpty()) {
-            val mix = state.topTracks.take(12)
-            item {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("Mix lagu", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
-                    TextButton(onClick = { onPlay(mix.first(), mix) }) { Text("Putar semua") }
-                }
-            }
-            itemsIndexed(mix, key = { _, t -> "fy" + t.id }) { i, t ->
-                NumberedTrackRow(
-                    i + 1, t, state.current?.id == t.id,
-                    liked = state.liked.any { it.id == t.id && it.source == t.source },
-                    onPlay = { onPlay(t, mix) }, onLike = { onLike(t) }, onMenu = { onMenu(t) },
-                )
-            }
-        }
+        item { BrandHeader("For You", "For you today · built from what you listen to") }
+        feed(state, onOpen, onPlay, onLike, onMenu, onRefresh)
     }
 }
 
@@ -522,6 +640,7 @@ private fun QueueScreen(
     onPlayQuery: (String) -> Unit,
     onCreatePlaylist: (String) -> Boolean,
     onRemovePlaylist: (String) -> Unit,
+    onPlaylistIcon: (String, String) -> Unit,
     onOpenLocal: (String) -> Unit,
     importState: LoomViewModel.Importing,
     onImportSource: (Source) -> Unit,
@@ -533,6 +652,42 @@ private fun QueueScreen(
 ) {
     var naming by remember { mutableStateOf(false) }
     var importing by remember { mutableStateOf(false) }
+    // Which playlist is choosing an icon; null closes the dialog.
+    var iconFor by remember { mutableStateOf<NamedPlaylist?>(null) }
+
+    iconFor?.let { pl ->
+        AlertDialog(
+            onDismissRequest = { iconFor = null },
+            title = { Text("Ikon playlist") },
+            text = {
+                // Four per row: twelve marks fit without scrolling.
+                FlowRow(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    PlaylistIcons.all.forEach { (name, icon) ->
+                        IconButton(
+                            onClick = { onPlaylistIcon(pl.name, name); iconFor = null },
+                            modifier = Modifier.size(48.dp),
+                        ) {
+                            Icon(
+                                icon,
+                                contentDescription = name,
+                                modifier = Modifier.size(24.dp),
+                                tint = if (pl.icon == name) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { onPlaylistIcon(pl.name, ""); iconFor = null }) { Text("Pakai sampul") }
+            },
+            dismissButton = { TextButton(onClick = { iconFor = null }) { Text("Batal") } },
+        )
+    }
     var importName by remember { mutableStateOf("") }
     var draft by remember { mutableStateOf("") }
     LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 190.dp)) {
@@ -571,6 +726,7 @@ private fun QueueScreen(
                             onOpen = { onOpenLocal(pl.name) },
                             onPlay = { pl.tracks.firstOrNull()?.let { t -> onPlay(t, pl.tracks) } },
                             onDelete = { onRemovePlaylist(pl.name) },
+                            onIcon = { iconFor = pl },
                         )
                     }
                 }
@@ -805,11 +961,13 @@ private fun PlaylistDetail(
         }
         if (state.loading && tracks.isEmpty()) {
             // Title already known from the tapped card, so the header is real, not a placeholder.
-            PlaylistHero(title, tracks, null)
+            PlaylistHero(title, tracks, null, state.playlists.firstOrNull { it.name == title }?.icon ?: "")
             TrackSkeleton()
         } else {
             LazyColumn(contentPadding = PaddingValues(bottom = 190.dp)) {
-                item { PlaylistHero(title, tracks) { onPlay(tracks.first(), tracks) } }
+                item {
+                    PlaylistHero(title, tracks, { onPlay(tracks.first(), tracks) }, state.playlists.firstOrNull { it.name == title }?.icon ?: "")
+                }
                 if (tracks.isEmpty()) {
                     item {
                         EmptyState(
@@ -874,9 +1032,9 @@ private fun PlaylistDetail(
  * play button. A bare title line gave no sense of what was inside.
  */
 @Composable
-private fun PlaylistHero(title: String, tracks: List<Track>, onPlayAll: (() -> Unit)?) {
+private fun PlaylistHero(title: String, tracks: List<Track>, onPlayAll: (() -> Unit)?, icon: String = "") {
     Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
-        MosaicCover(tracks, 104.dp)
+        MosaicCover(tracks, 104.dp, icon)
         Spacer(Modifier.width(16.dp))
         Column(Modifier.weight(1f)) {
             Text(
@@ -907,12 +1065,25 @@ private fun PlaylistHero(title: String, tracks: List<Track>, onPlayAll: (() -> U
     }
 }
 
-/** One cover when there is one, a 2x2 grid of the first four when there are more. */
+/**
+ * One cover when there is one, a 2x2 grid of the first four when there are more. A pinned [icon]
+ * replaces the artwork entirely — a user-chosen mark is more recognisable than a mosaic.
+ */
 @Composable
-fun MosaicCover(tracks: List<Track>, size: androidx.compose.ui.unit.Dp) {
+fun MosaicCover(tracks: List<Track>, size: androidx.compose.ui.unit.Dp, icon: String = "") {
     val arts = tracks.mapNotNull { it.art.takeIf(String::isNotBlank) }.distinct().take(4)
     val shape = RoundedCornerShape(18.dp)
+    val pinned = PlaylistIcons.of(icon)
     Box(Modifier.size(size).clip(shape).background(MaterialTheme.colorScheme.surfaceVariant)) {
+        if (pinned != null) {
+            Icon(
+                pinned,
+                contentDescription = null,
+                modifier = Modifier.align(Alignment.Center).size(size / 2.2f),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            return@Box
+        }
         when (arts.size) {
             0 -> Icon(
                 Icons.Rounded.QueueMusic,
@@ -962,6 +1133,7 @@ private fun LocalPlaylistCard(
     onOpen: () -> Unit,
     onPlay: () -> Unit,
     onDelete: () -> Unit,
+    onIcon: () -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
     Row(
@@ -973,7 +1145,7 @@ private fun LocalPlaylistCard(
             .padding(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        MosaicCover(pl.tracks, 60.dp)
+        MosaicCover(pl.tracks, 60.dp, pl.icon)
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(
@@ -1013,6 +1185,10 @@ private fun LocalPlaylistCard(
                     onClick = { menu = false; onOpen() },
                 )
                 DropdownMenuItem(
+                    text = { Text("Ubah ikon") },
+                    onClick = { menu = false; onIcon() },
+                )
+                DropdownMenuItem(
                     text = { Text("Hapus playlist") },
                     onClick = { menu = false; onDelete() },
                 )
@@ -1028,7 +1204,7 @@ private fun LocalPlaylistCard(
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun TrackSkeleton() {
+fun TrackSkeleton(rows: Int = 7) {
     val alpha by rememberInfiniteTransition(label = "skeleton").animateFloat(
         initialValue = 0.35f,
         targetValue = 0.7f,
@@ -1038,7 +1214,7 @@ fun TrackSkeleton() {
     val block = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f * (alpha / 0.5f))
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
         // Artwork + two text lines: exactly the TrackRow footprint.
-        repeat(7) {
+        repeat(rows) {
             Row(
                 Modifier.fillMaxWidth().padding(vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1211,7 +1387,7 @@ fun TrackActionsSheet(
     onPlayNext: () -> Unit,
     onQueue: () -> Unit,
     onLike: () -> Unit,
-    onSaveTo: (String) -> Unit,
+    onSaveTo: () -> Unit,
     onCreate: () -> Unit,
     onShare: () -> Unit,
     onArtist: () -> Unit,
@@ -1247,7 +1423,7 @@ fun TrackActionsBody(
     onPlayNext: () -> Unit,
     onQueue: () -> Unit,
     onLike: () -> Unit,
-    onSaveTo: (String) -> Unit,
+    onSaveTo: () -> Unit,
     onCreate: () -> Unit,
     onShare: () -> Unit,
     onArtist: () -> Unit,
@@ -1284,13 +1460,9 @@ fun TrackActionsBody(
             }
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
             SheetRow(if (liked) "Hapus dari suka" else "Suka", Icons.Rounded.FavoriteBorder, onLike)
-            if (playlists.isEmpty()) {
-                SheetRow("Simpan ke playlist", Icons.Rounded.PlaylistAdd, null)
-            } else {
-                playlists.forEach { name ->
-                    SheetRow("Simpan ke $name", Icons.Rounded.PlaylistAdd) { onSaveTo(name) }
-                }
-            }
+            // One entry, always: with 100 playlists the old inline list was unusable. The picker
+            // has a search box, which is what makes a long list navigable.
+            SheetRow("Simpan ke playlist", Icons.Rounded.PlaylistAdd, onSaveTo)
             // The menu is where a user decides a track belongs somewhere; creating the target here
             // avoids backing out to the library first.
             SheetRow("Buat playlist baru", Icons.Rounded.Add) { onCreate() }
@@ -1303,6 +1475,66 @@ fun TrackActionsBody(
                 SheetRow("Equalizer · ${player.eq}", Icons.Rounded.Equalizer) { player.onEq() }
             }
         }
+}
+
+/**
+ * "Simpan ke playlist" as its own page: a search box over the user's playlists, plus a way to make
+ * a new one. With one entry in the sheet the track is never buried under a hundred playlist rows.
+ */
+@Composable
+fun SaveToPlaylistSheet(
+    track: Track,
+    playlists: List<String>,
+    onDismiss: () -> Unit,
+    onPick: (String) -> Unit,
+    onCreate: () -> Unit,
+) {
+    var q by remember { mutableStateOf("") }
+    val shown = remember(q, playlists) {
+        if (q.isBlank()) playlists else playlists.filter { it.contains(q, ignoreCase = true) }
+    }
+    Column(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Simpan ke playlist", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    track.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            IconButton(onClick = onDismiss) { Icon(Icons.Rounded.Close, contentDescription = "Close") }
+        }
+        OutlinedTextField(
+            value = q,
+            onValueChange = { q = it },
+            singleLine = true,
+            placeholder = { Text("Cari playlist") },
+            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+            shape = RoundedCornerShape(50),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
+        )
+        // Capped height: the sheet must not try to lay out a hundred rows at once.
+        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 320.dp)) {
+            if (shown.isEmpty()) {
+                item {
+                    Text(
+                        if (playlists.isEmpty()) "Belum ada playlist." else "Tidak ada playlist yang cocok.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
+                    )
+                }
+            }
+            items(shown, key = { it }) { name ->
+                SheetRow(name, Icons.Rounded.QueueMusic) { onPick(name) }
+            }
+        }
+        HorizontalDivider(Modifier.padding(vertical = 6.dp))
+        SheetRow("Buat playlist baru", Icons.Rounded.Add) { onCreate() }
+    }
 }
 
 @Composable

@@ -59,6 +59,12 @@ data class OpenPlaylist(
     val collection: Collection? = null,
 )
 
+/** Rotating genre row on the feed. `loading` drives the grey skeleton. */
+data class GenreBlock(val name: String, val tracks: List<Track>, val loading: Boolean = false)
+
+/** Rotating mood row ("Rain + Feels", "Night Drive", ...). Same shape as [GenreBlock]. */
+data class MoodBlock(val name: String, val tracks: List<Track>, val loading: Boolean = false)
+
 data class UiState(
     val tab: Tab = Tab.HOME,
     val query: String = "",
@@ -105,6 +111,13 @@ data class UiState(
     val forYou: List<Shelf> = emptyList(),
     /** Radio seeded from the user's own history; the personal half of For You. */
     val forYouTracks: List<Track> = emptyList(),
+    /**
+     * The rotating genre block: a genre, the tracks found for it, and whether it is still loading.
+     * Home and For You both read this, so a refresh on either tab shows the same block.
+     */
+    val genreBlock: GenreBlock? = null,
+    /** Mood block: "Rain + Feels", "Night Drive", ... rotates on refresh like the genre block. */
+    val moodBlock: MoodBlock? = null,
     /** Keyed by tab: a detail page opened from For You must not appear on Home. */
     val openPlaylist: Map<Tab, OpenPlaylist> = emptyMap(),
     val queue: List<Track> = emptyList(),
@@ -184,8 +197,50 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setLib(l: Lib) { _state.value = _state.value.copy(lib = l) }
 
+    /**
+     * Genre and mood blocks for the feed. Picks differ from the previous pick, so a refresh visibly
+     * changes the page instead of occasionally returning the same row twice.
+     *
+     * `shortcut:` one genre and one mood at a time, ten tracks each. More would triple the network
+     * cost of opening a tab for content that sits below the fold.
+     */
+    fun loadRotatingBlocks() {
+        val genres = listOf("Pop Indonesia", "Hip hop", "Dangdut", "Rock", "Lo-fi", "K-pop", "Indie", "R&B")
+        val moods = listOf(
+            "Rain + Feels" to "hujan galau akustik",
+            "Night Drive" to "night drive synth",
+            "Pagi Santai" to "pagi santai akustik",
+            "Fokus Kerja" to "instrumental fokus",
+            "Teman Jalan" to "jalan jalan ceria",
+            "Sesi Galau" to "galau melankolis",
+        )
+        val prevGenre = _state.value.genreBlock?.name
+        val prevMood = _state.value.moodBlock?.name
+        val genre = genres.filter { it != prevGenre }.random()
+        val (moodName, moodQuery) = moods.filter { it.first != prevMood }.random()
+
+        _state.value = _state.value.copy(
+            genreBlock = GenreBlock(genre, emptyList(), loading = true),
+            moodBlock = MoodBlock(moodName, emptyList(), loading = true),
+        )
+        viewModelScope.launch {
+            // One source each: these are background rows, and YouTube Music already has both.
+            val res = withContext(Dispatchers.IO) {
+                val g = async { runCatching { Music.search(genre, Source.YT_MUSIC) }.getOrDefault(emptyList()).take(10) }
+                val m = async { runCatching { Music.search(moodQuery, Source.YT_MUSIC) }.getOrDefault(emptyList()).take(10) }
+                g.await() to m.await()
+            }
+            val (g, m) = res
+            _state.value = _state.value.copy(
+                genreBlock = GenreBlock(genre, g, loading = false),
+                moodBlock = MoodBlock(moodName, m, loading = false),
+            )
+        }
+    }
+
     fun loadHome() {
         if (_state.value.loading) return
+        if (_state.value.genreBlock == null) loadRotatingBlocks()
         _state.value = _state.value.copy(loading = true, error = null)
         viewModelScope.launch {
             // Shelves and track rows are independent; fetch them together so the screen does not
@@ -205,6 +260,7 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun loadForYou() {
+        loadRotatingBlocks()
         viewModelScope.launch {
             // Personal first: seed radio from the tracks actually played, then fall back to the
             // generic Explore page when there is no history yet.
@@ -601,6 +657,11 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
 
     fun addToPlaylist(name: String, t: Track) {
         store.addToPlaylist(name, t)
+        _state.value = _state.value.copy(playlists = store.playlists)
+    }
+
+    fun setPlaylistIcon(name: String, icon: String) {
+        store.setPlaylistIcon(name, icon)
         _state.value = _state.value.copy(playlists = store.playlists)
     }
 

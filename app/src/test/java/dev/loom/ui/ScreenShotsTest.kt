@@ -296,4 +296,30 @@ class ScreenShotsTest {
             TrackSkeleton()
         }
     }
+
+    /** The save picker: one search box, a short list, and a way to create. */
+    @Test
+    fun saveToPlaylistPicker() = shoot("save-to-playlist") {
+        SaveToPlaylistSheet(
+            track = track,
+            playlists = listOf("Rain + Feels", "Dangdut Koplo", "Kerja Fokus"),
+            onDismiss = {},
+            onPick = {},
+            onCreate = {},
+        )
+    }
+
+    /** A pinned icon must read at 60dp without any artwork behind it. */
+    @Test
+    fun playlistIconCover() = shoot("playlist-icon") {
+        Column(Modifier.fillMaxSize().padding(16.dp)) {
+            listOf("chill", "fire", "night").forEach { name ->
+                Row(Modifier.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    dev.loom.ui.MosaicCover(emptyList(), 60.dp, name)
+                    Spacer(Modifier.width(14.dp))
+                    Text(name, style = MaterialTheme.typography.titleMedium)
+                }
+            }
+        }
+    }
 }

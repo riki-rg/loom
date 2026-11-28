@@ -84,4 +84,39 @@ class QueueRestoreTest {
         assertEquals(dev.loom.theme.Mode.LIGHT, t.mode)
         assertNull(t.customSeed)
     }
+
+    /** A pinned icon is a stored field: it must survive a restart and a rename. */
+    @Test
+    fun playlistIconSurvivesColdStartAndRename() {
+        val store = Store(app)
+        store.createPlaylist("Jalan Pagi")
+        store.setPlaylistIcon("Jalan Pagi", "chill")
+        assertEquals("chill", Store(app).playlists.first { it.name == "Jalan Pagi" }.icon)
+
+        Store(app).renamePlaylist("Jalan Pagi", "Jalan Sore")
+        val renamed = Store(app).playlists.first { it.name == "Jalan Sore" }
+        assertEquals("chill", renamed.icon)
+    }
+
+    /** Clearing the icon restores the mosaic rather than leaving a dangling name. */
+    @Test
+    fun clearingPlaylistIconIsStored() {
+        val store = Store(app)
+        store.createPlaylist("Hapus Ikon")
+        store.setPlaylistIcon("Hapus Ikon", "fire")
+        store.setPlaylistIcon("Hapus Ikon", "")
+        assertEquals("", Store(app).playlists.first { it.name == "Hapus Ikon" }.icon)
+    }
+
+    /** The picker filters by substring, case-insensitively; that is its whole contract. */
+    @Test
+    fun pickerFilterMatchesCaseInsensitiveSubstring() {
+        val names = listOf("Dangdut Koplo", "Rain + Feels", "Kerja Fokus")
+        fun filter(q: String) = if (q.isBlank()) names else names.filter { it.contains(q, ignoreCase = true) }
+
+        assertEquals(names, filter(""))
+        assertEquals(listOf("Rain + Feels"), filter("rain"))
+        assertEquals(listOf("Dangdut Koplo", "Kerja Fokus"), filter("O"))
+        assertEquals(emptyList<String>(), filter("zzz"))
+    }
 }

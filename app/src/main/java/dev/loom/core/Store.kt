@@ -139,6 +139,7 @@ class Store(ctx: Context) {
                 NamedPlaylist(
                     name = o.optString("name"),
                     tracks = (0 until items.length()).map { trackOf(items.getJSONObject(it)) },
+                    icon = o.optString("icon", ""),
                 )
             }
         }.getOrDefault(emptyList())
@@ -148,6 +149,7 @@ class Store(ctx: Context) {
                 v.map { pl ->
                     JSONObject()
                         .put("name", pl.name)
+                        .put("icon", pl.icon)
                         .put("tracks", JSONArray(pl.tracks.map { it.toJson() }))
                 },
             ).toString(),
@@ -180,6 +182,11 @@ class Store(ctx: Context) {
 
     fun removePlaylist(name: String) {
         playlists = playlists.filterNot { it.name == name }
+    }
+
+    /** Blank clears the icon and restores the artwork mosaic. */
+    fun setPlaylistIcon(name: String, icon: String) {
+        playlists = playlists.map { if (it.name == name) it.copy(icon = icon) else it }
     }
 
     fun renamePlaylist(old: String, new: String): Boolean {
@@ -226,4 +233,5 @@ class Store(ctx: Context) {
 }
 
 /** A user-named playlist. */
-data class NamedPlaylist(val name: String, val tracks: List<Track>)
+/** `icon` is a name from [dev.loom.ui.PlaylistIcons]; blank means the artwork mosaic. */
+data class NamedPlaylist(val name: String, val tracks: List<Track>, val icon: String = "")
