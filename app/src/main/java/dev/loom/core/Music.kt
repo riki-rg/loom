@@ -1,5 +1,7 @@
 package dev.loom.core
 
+import android.net.Uri
+
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -216,6 +218,24 @@ object Music {
      * `shortcut:` no match scoring — the top YouTube hit is trusted; add a title/artist
      * similarity check if wrong songs start playing.
      */
+    /**
+     * Queue items travel as `loom://<source>/<id>` because a MediaItem needs a URI, and the
+     * stream URL is not known until the track is actually opened. Both directions live here so
+     * the service and the player cannot drift apart.
+     */
+    fun mediaUri(t: Track): String = "loom://${t.source.name}/${Uri.encode(t.id)}"
+
+    fun trackOfUri(uri: String): Track? {
+        if (!uri.startsWith("loom://")) return null
+        val rest = uri.removePrefix("loom://")
+        val slash = rest.indexOf('/')
+        if (slash <= 0) return null
+        val source = runCatching { Source.valueOf(rest.substring(0, slash)) }.getOrNull() ?: return null
+        val id = Uri.decode(rest.substring(slash + 1))
+        // Title and artist are not in the URI; the resolver only needs the source and id.
+        return Track(id, "", "", "", source)
+    }
+
     suspend fun bestStream(track: Track): Stream {
         if (track.source == Source.YT_MUSIC) return stream(track)
         return coroutineScope {

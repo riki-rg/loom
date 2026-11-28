@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.RemoveCircleOutline
 import androidx.compose.material3.Icon
@@ -186,6 +187,7 @@ fun ShelfRow(title: String, items: List<Collection>, onOpen: (Collection) -> Uni
 fun TrackRow(
     t: Track,
     selected: Boolean,
+    liked: Boolean = false,
     onLike: (() -> Unit)? = null,
     onRemove: (() -> Unit)? = null,
     onClick: () -> Unit,
@@ -223,11 +225,12 @@ fun TrackRow(
         }
         if (onLike != null) {
             IconButton(onClick = onLike, modifier = Modifier.size(40.dp)) {
+                // Filled + primary when liked: the border-only heart never showed state at all.
                 Icon(
-                    Icons.Rounded.FavoriteBorder,
-                    contentDescription = "Like",
+                    if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                    contentDescription = if (liked) "Unlike" else "Like",
                     modifier = Modifier.size(19.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = if (liked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }

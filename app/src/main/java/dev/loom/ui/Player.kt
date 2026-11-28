@@ -198,8 +198,6 @@ fun NowPlayingSheet(
                 IconButton(onClick = { onSkip(-1) }) {
                     Icon(Icons.Rounded.SkipPrevious, contentDescription = "Previous", modifier = Modifier.size(30.dp))
                 }
-                // -10s / +10s sit beside the transport: seeking by a fixed step is the common
-                // gesture, and dragging the slider for ten seconds is not.
                 IconButton(onClick = { onSeekBy(-10_000) }) {
                     Icon(Icons.Rounded.Replay10, contentDescription = "Mundur 10 detik", modifier = Modifier.size(28.dp))
                 }
@@ -222,11 +220,11 @@ fun NowPlayingSheet(
                         )
                     }
                 }
-                IconButton(onClick = { onSkip(1) }) {
-                    Icon(Icons.Rounded.SkipNext, contentDescription = "Next", modifier = Modifier.size(30.dp))
-                }
                 IconButton(onClick = { onSeekBy(10_000) }) {
                     Icon(Icons.Rounded.Forward10, contentDescription = "Maju 10 detik", modifier = Modifier.size(28.dp))
+                }
+                IconButton(onClick = { onSkip(1) }) {
+                    Icon(Icons.Rounded.SkipNext, contentDescription = "Next", modifier = Modifier.size(30.dp))
                 }
             }
 
@@ -286,6 +284,7 @@ fun NowPlayingSheet(
                     TrackRow(
                         t = t,
                         selected = false,
+                        liked = state.liked.any { it.id == t.id && it.source == t.source },
                         onLike = { onLikeTrack(t) },
                         onClick = { onPlayTrack(t) },
                     )

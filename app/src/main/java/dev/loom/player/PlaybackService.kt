@@ -17,10 +17,13 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import dev.loom.core.Music
+import kotlinx.coroutines.runBlocking
 
 /** Chrome UA: googlevideo and SoundCloud CDN both reject the ExoPlayer default. */
 private const val UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
@@ -116,8 +119,19 @@ class PlaybackService : MediaSessionService() {
                 .setAllowCrossProtocolRedirects(true)
                 .setConnectTimeoutMs(20_000)
                 .setReadTimeoutMs(20_000)
+            // Queue items carry no stream URL: resolving 50 tracks up front would be 50 network
+            // calls and a stale URL by the time the user reaches track 40. The resolver fills in
+            // the URL at the moment a track is actually opened, keyed by the item's mediaId.
+            val lazy = ResolvingDataSource.Factory(DefaultDataSource.Factory(ctx, http)) { spec ->
+                val track = Music.trackOfUri(spec.uri.toString()) ?: return@Factory spec
+                // resolveDataSpec is synchronous and runs on the loading thread, so blocking here
+                // is correct: it is the network fetch for this track and nothing else.
+                val stream = runBlocking { runCatching { Music.bestStream(track) }.getOrNull() }
+                    ?: throw java.io.IOException("cannot resolve ${spec.uri}")
+                spec.withUri(android.net.Uri.parse(stream.url))
+            }
             return ExoPlayer.Builder(ctx)
-                .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(ctx, http)))
+                .setMediaSourceFactory(DefaultMediaSourceFactory(lazy))
                 .setAudioAttributes(
                     AudioAttributes.Builder()
                         .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)

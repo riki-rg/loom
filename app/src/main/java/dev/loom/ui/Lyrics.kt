@@ -31,6 +31,8 @@ import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.TextButton
+import java.util.Locale
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -70,8 +72,14 @@ fun LyricsScreen(
     onClose: () -> Unit,
     onToggle: () -> Unit,
     onSkip: (Int) -> Unit,
+    /** Shift applied to every timestamp, in seconds. Positive delays the lyrics. */
+    offset: Double = 0.0,
+    onOffset: (Double) -> Unit = {},
 ) {
-    val seconds = positionMs / 1000.0
+    // lrclib often holds several edits of one song with identical durations and timings seconds
+    // apart, so which one is right cannot be decided from metadata. The offset is the fix that
+    // works for the user in front of the drift: nudge until the line lands.
+    val seconds = positionMs / 1000.0 - offset
     // Index of the line being sung right now; -1 before the first one.
     val active = remember(lines, seconds) {
         lines.indexOfLast { it.start <= seconds }
@@ -113,6 +121,26 @@ fun LyricsScreen(
                 }
                 Spacer(Modifier.weight(1f))
                 Spacer(Modifier.width(48.dp))
+            }
+
+            if (lines.isNotEmpty()) {
+                // Only shown with real timings: there is nothing to shift otherwise.
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 2.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = { onOffset(offset - 0.5) }) { Text("-0.5s") }
+                    Text(
+                        "offset " + (if (offset > 0) "+" else "") + String.format(java.util.Locale.US, "%.1f", offset) + "s",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    TextButton(onClick = { onOffset(offset + 0.5) }) { Text("+0.5s") }
+                    if (offset != 0.0) {
+                        TextButton(onClick = { onOffset(0.0) }) { Text("Reset") }
+                    }
+                }
             }
 
             if (lines.isEmpty()) {

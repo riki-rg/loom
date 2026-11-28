@@ -175,6 +175,7 @@ class ScreenShotsTest {
             onCreate = {},
             onShare = {},
             onArtist = {},
+            onDownload = {},
         )
     }
 

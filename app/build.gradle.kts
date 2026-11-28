@@ -24,8 +24,8 @@ android {
         applicationId = "dev.loom"
         minSdk = 26
         targetSdk = 35
-        versionCode = 18
-        versionName = "0.11.0"
+        versionCode = 19
+        versionName = "1.0.0"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
@@ -112,6 +112,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.media3:media3-exoplayer:1.5.1")
     implementation("androidx.media3:media3-session:1.5.1")
+    // Offline downloads: Transformer re-encodes a trimmed range into a real file.
+    implementation("androidx.media3:media3-transformer:1.5.1")
     implementation("io.coil-kt:coil-compose:2.7.0")
     // Coil reads this resource at startup: shared OkHttp client, memory+disk cache sized for
     // scrolling shelves, and RGB_565 bitmaps. Covers are opaque, so alpha buys nothing.

@@ -390,6 +390,15 @@ fn yt_for_you() -> Result<Value, String> {
     }
     // Each shelf is its own LazyRow with per-row keys, so a playlist may appear in two shelves.
     shelves.retain(|s| s["items"].as_array().map(|a| !a.is_empty()).unwrap_or(false));
+    // Explore + charts together hand back dozens of shelves; every one is a LazyRow that resolves
+    // its own covers, which is what made this page slow to open. Twelve is well past a scroll.
+    shelves.truncate(12);
+    // A shelf of 100 cards is a horizontal scroll nobody finishes.
+    for s in shelves.iter_mut() {
+        if let Some(items) = s["items"].as_array_mut() {
+            items.truncate(20);
+        }
+    }
     if shelves.is_empty() {
         return Err("for you: no shelves".into());
     }
@@ -465,8 +474,8 @@ fn yt_lyrics(video_id: &str) -> Result<Value, String> {
     }
     // YouTube Music hands out untimed text only. lrclib has real LRC timings keyed on the
     // same title/artist, so try it first for anything the user will actually see scrolling.
-    let (title, artist) = yt_track_meta(video_id).unwrap_or_default();
-    if let Ok(synced) = lrclib(&title, &artist) {
+    let (title, artist, duration_s) = yt_track_meta(video_id).unwrap_or_default();
+    if let Ok(synced) = lrclib(&title, &artist, duration_s) {
         if !synced.is_empty() {
             return Ok(json!({"text": text, "synced": synced}));
         }
@@ -475,7 +484,7 @@ fn yt_lyrics(video_id: &str) -> Result<Value, String> {
 }
 
 /// Title and artist for a video id, from the same `next` payload lyrics already needs.
-fn yt_track_meta(video_id: &str) -> Option<(String, String)> {
+fn yt_track_meta(video_id: &str) -> Option<(String, String, f64)> {
     let res: Value = http()
         .post("https://music.youtube.com/youtubei/v1/player?prettyPrint=false")
         .header("Content-Type", "application/json")
@@ -496,29 +505,68 @@ fn yt_track_meta(video_id: &str) -> Option<(String, String)> {
     Some((
         d.get("title")?.as_str()?.to_string(),
         d.get("author")?.as_str()?.to_string(),
+        // lengthSeconds is a string in the payload, not a number.
+        d.get("lengthSeconds").and_then(|l| l.as_str()).and_then(|l| l.parse().ok()).unwrap_or(0.0),
     ))
 }
 
-/// Synced lyrics from lrclib.net, which returns LRC lines. Free, no key, no rate limit worth
-/// worrying about; it keys on title + artist so a remix suffix just misses and falls back.
-fn lrclib(title: &str, artist: &str) -> Result<Vec<Value>, String> {
-    if title.trim().is_empty() || artist.trim().is_empty() {
+/// Synced lyrics from lrclib.net. `/api/search` rather than `/api/get`: get demands an exact
+/// title, and a YouTube title ("X (Official Lyric Video)") never matches it, so every track with
+/// a noisy title silently fell back to untimed text.
+///
+/// The harder half is which hit to trust. lrclib holds several entries for one song — a lyric
+/// video, an album cut, a remaster — with timings that differ by seconds. Picking the first hit
+/// is what made lyrics drift on tracks that open with a spoken intro: the timings were right for
+/// a different edit. The entry whose duration matches the track is the right one, because a
+/// matching length means a matching arrangement.
+fn lrclib(title: &str, artist: &str, duration_s: f64) -> Result<Vec<Value>, String> {
+    let clean = strip_title_noise(title);
+    let (title, artist) = (clean.as_str(), artist.trim());
+    if title.is_empty() || artist.is_empty() {
         return Err("no metadata".into());
     }
     let url = format!(
-        "https://lrclib.net/api/get?track_name={}&artist_name={}",
+        "https://lrclib.net/api/search?track_name={}&artist_name={}",
         urlencode(title),
         urlencode(artist),
     );
     let res: Value = http()
         .get(&url)
-        .header("User-Agent", "Loom/0.8 (https://github.com/riki-rg/loom)")
+        .header("User-Agent", "Loom/0.11 (https://github.com/riki-rg/loom)")
         .send()
         .map_err(|e| e.to_string())?
         .json()
         .map_err(|e| e.to_string())?;
-    let lrc = res.get("syncedLyrics").and_then(|s| s.as_str()).unwrap_or("");
+    let hits = res.as_array().cloned().unwrap_or_default();
+    // Closest duration wins; a 5s tolerance absorbs encoder padding without accepting another
+    // edit of the song, which is typically tens of seconds off.
+    let best = hits
+        .iter()
+        .filter(|h| h.get("syncedLyrics").and_then(|s| s.as_str()).map_or(false, |s| !s.trim().is_empty()))
+        .min_by(|a, b| {
+            let da = (a.get("duration").and_then(|d| d.as_f64()).unwrap_or(0.0) - duration_s).abs();
+            let db = (b.get("duration").and_then(|d| d.as_f64()).unwrap_or(0.0) - duration_s).abs();
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .ok_or("no synced lyrics")?;
+    let lrc = best.get("syncedLyrics").and_then(|s| s.as_str()).unwrap_or("");
     Ok(parse_lrc(lrc))
+}
+
+/// Drops the parenthetical/bracket noise YouTube titles carry, so the lookup stands a chance.
+fn strip_title_noise(title: &str) -> String {
+    let mut out = String::with_capacity(title.len());
+    let mut depth = 0usize;
+    for ch in title.chars() {
+        match ch {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => out.push(ch),
+            _ => {}
+        }
+    }
+    // Trailing separators left behind by a removed bracket.
+    out.trim().trim_end_matches(['-', '|', '·']).trim().to_string()
 }
 
 
@@ -987,7 +1035,24 @@ fn import_deezer(playlist_id: &str) -> Result<Value, String> {
     }))
 }
 
-/// Spotify playlists are read from the embed page's `__NEXT_DATA__`, which carries the full
+/// Per-track cover via Spotify's public oEmbed endpoint. The hash encodes the size
+/// (`ab67616d00001e02` = 300px, `ab67616d0000b273` = 640px), so swapping the prefix is enough.
+/// `shortcut:` one request per track; a 50-track import costs 50 round trips. Batch later if it
+/// starts to hurt — the embed payload itself never carries per-track art.
+fn spotify_track_art(track_id: &str) -> Option<String> {
+    let v: Value = http()
+        .get("https://open.spotify.com/oembed")
+        .query(&[("url", format!("https://open.spotify.com/track/{track_id}"))])
+        .header("User-Agent", SP_PLAYER_UA)
+        .send()
+        .ok()?
+        .json()
+        .ok()?;
+    let url = v.get("thumbnail_url").and_then(|u| u.as_str())?;
+    Some(url.replace("ab67616d00001e02", "ab67616d0000b273"))
+}
+
+/// Spotify playlists are read from the embed page's `__NEXT_DATA__`'s `__NEXT_DATA__`, which carries the full
 /// track list with title, artist and duration. No OAuth, no client secret.
 fn import_spotify(playlist_id: &str) -> Result<Value, String> {
     let id = id_from(playlist_id, &["/playlist/", "playlist:"]);
@@ -1007,8 +1072,8 @@ fn import_spotify(playlist_id: &str) -> Result<Value, String> {
         .get("trackList")
         .and_then(|t| t.as_array())
         .ok_or("spotify: no tracks")?;
-    // Per-track cover art is absent from the embed payload; the playlist's own cover is the
-    // only image available, so it stands in for every row.
+    // The embed payload has no per-track cover, so every row used the playlist's own cover —
+    // which is why imported Spotify lists all looked the same. oEmbed answers per track.
     let list_art = entity
         .pointer("/coverArt/sources/0/url")
         .and_then(|u| u.as_str())
@@ -1018,13 +1083,7 @@ fn import_spotify(playlist_id: &str) -> Result<Value, String> {
         .filter_map(|t| {
             let uri = t.get("uri").and_then(|u| u.as_str())?;
             let tid = uri.rsplit(':').next()?;
-            let art = t
-                .pointer("/coverArt/sources")
-                .and_then(|s| s.as_array())
-                .and_then(|a| a.last())
-                .and_then(|s| s.get("url"))
-                .and_then(|u| u.as_str())
-                .unwrap_or(list_art);
+            let art = spotify_track_art(tid).unwrap_or_else(|| list_art.to_string());
             Some(json!({
                 "id": tid,
                 "title": t.get("title").and_then(|x| x.as_str()).unwrap_or(""),
@@ -1292,6 +1351,18 @@ mod tests {
     }
 
     #[test]
+    fn strip_title_noise_removes_bracket_noise() {
+        assert_eq!(strip_title_noise("Satu Bulan (Official Lyric Video)"), "Satu Bulan");
+        assert_eq!(strip_title_noise("Kangen [Remastered 2011]"), "Kangen");
+        assert_eq!(strip_title_noise("Bertaut"), "Bertaut");
+        // A trailing separator left by the removed bracket must go too.
+        assert_eq!(strip_title_noise("Ruang Rindu - (Official Audio)"), "Ruang Rindu");
+        // Nested and unbalanced brackets must not panic or eat the title.
+        assert_eq!(strip_title_noise("A (B (C)) D"), "A  D");
+        assert_eq!(strip_title_noise("Half (open"), "Half");
+    }
+
+    #[test]
     fn hires_art_upgrades_youtube_thumbs_only() {
         assert_eq!(
             hires_art("https://i.ytimg.com/vi/abc/hqdefault.jpg?sqp=1"),
@@ -1365,6 +1436,24 @@ mod tests {
         assert_eq!(got[0]["text"], "Satu bulan");
         assert!((got[1]["start"].as_f64().unwrap() - 62.5).abs() < 0.01);
         assert_eq!(urlencode("Satu Bulan & Co"), "Satu%20Bulan%20%26%20Co");
+    }
+
+    /// The bug the user hit: two lrclib entries for one song, timings seconds apart. The entry
+    /// whose duration matches the track is the one that stays in sync.
+    #[test]
+    #[ignore]
+    fn live_lyrics_pick_matching_duration() {
+        // Satu Bulan is 200s; its two lrclib entries start at 7.8s and 0.88s.
+        let synced = lrclib("Satu Bulan (Official Lyric Video)", "Bernadya", 200.0).expect("lyrics");
+        let first = synced[0]["start"].as_f64().unwrap();
+        println!("Satu Bulan first line at {first}s over {} lines", synced.len());
+        assert!(synced.len() > 10);
+        // A 230s entry exists for this song; matching on duration must not pick it.
+        let last = synced.last().unwrap()["start"].as_f64().unwrap();
+        assert!(last < 200.0, "picked the 230s edit: last line at {last}s");
+        // Noise in the title must not stop the lookup.
+        let noisy = lrclib("Satu Bulan [Official Music Video]", "Bernadya", 200.0).expect("noisy title");
+        assert_eq!(noisy.len(), synced.len());
     }
 
     #[test]
@@ -1479,6 +1568,20 @@ mod import_live {
             println!("{label}: name={:?} n={n} first={}", v["name"], v["tracks"][0]["title"]);
             assert!(n > 0, "{label} returned no tracks");
             assert!(!v["name"].as_str().unwrap().is_empty(), "{label} has no name");
+            // Every row must carry its own cover, not the playlist's cover repeated.
+            let arts: Vec<&str> = v["tracks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|t| t["art"].as_str())
+                .collect();
+            assert!(arts.iter().all(|a| !a.is_empty()), "{label} has rows with no art");
+            if label == "spotify" {
+                let unique: std::collections::HashSet<&&str> = arts.iter().collect();
+                println!("spotify: {} rows, {} distinct covers, first={}", arts.len(), unique.len(), arts[0]);
+                assert!(unique.len() > 1, "spotify rows all share one cover");
+                assert!(arts[0].contains("ab67616d0000b273"), "spotify art is not the 640px variant");
+            }
         }
     }
 }

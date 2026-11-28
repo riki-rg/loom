@@ -14,6 +14,7 @@ import dev.loom.core.NamedPlaylist
 import coil.compose.AsyncImage
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.background
@@ -46,12 +47,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Bookmark
+import androidx.compose.material.icons.rounded.BookmarkBorder
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.material3.Text
 import dev.loom.core.Music
 import androidx.compose.material.icons.rounded.FileDownload
@@ -74,6 +78,8 @@ import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material.icons.rounded.DownloadDone
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
@@ -154,6 +160,8 @@ fun Root(vm: LoomViewModel) {
                         onRemoveTrack = vm::removeFromPlaylist,
                         onRename = { vm.renamePlaylist(open.title, it) },
                         onDelete = { vm.removePlaylist(open.title); vm.closePlaylist() },
+                        onSave = { open.collection?.let(vm::toggleSaved) },
+                        onDownloadAll = { vm.downloadPlaylist(open.title, open.tracks) },
                     )
                 } else {
                     when (state.tab) {
@@ -176,6 +184,8 @@ fun Root(vm: LoomViewModel) {
                                 vm::setImportInput,
                                 vm::runImport,
                                 vm::closeImport,
+                                vm::playFile,
+                                vm::removeDownloadFile,
                             )
                         }
                         Tab.SEARCH -> SearchScreen(
@@ -261,6 +271,7 @@ fun Root(vm: LoomViewModel) {
         val menu by vm.menuTrack.collectAsState()
         // Set when "Buat playlist baru" is tapped: the track waiting for a new home.
         var newPl by remember { mutableStateOf<Track?>(null) }
+        var dlTrack by remember { mutableStateOf<Track?>(null) }
         var newPlName by remember { mutableStateOf("") }
         menu?.let { t ->
             val ctx = LocalContext.current
@@ -283,10 +294,55 @@ fun Root(vm: LoomViewModel) {
                     vm.closeMenu()
                 },
                 onArtist = { vm.openArtist(t) },
+                onDownload = { vm.closeMenu(); dlTrack = t },
             )
         }
 
-        newPl?.let { t ->
+        dlTrack?.let { t ->
+        var startM by remember(t.id) { mutableStateOf("0") }
+        var startS by remember(t.id) { mutableStateOf("0") }
+        val totalMin = (t.durationMs / 60000).toInt()
+        val totalSec = ((t.durationMs / 1000) % 60).toInt()
+        var endM by remember(t.id) { mutableStateOf(totalMin.toString()) }
+        var endS by remember(t.id) { mutableStateOf(totalSec.toString()) }
+        AlertDialog(
+            onDismissRequest = { dlTrack = null },
+            title = { Text("Unduh lagu") },
+            text = {
+                Column {
+                    Text(t.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        "Kosongkan atau samakan dengan durasi untuk mengunduh utuh.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Dari", style = MaterialTheme.typography.labelLarge, modifier = Modifier.width(48.dp))
+                        MinuteSecondField(startM, startS) { m, s -> startM = m; startS = s }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Sampai", style = MaterialTheme.typography.labelLarge, modifier = Modifier.width(48.dp))
+                        MinuteSecondField(endM, endS) { m, s -> endM = m; endS = s }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val a = (startM.toLongOrNull() ?: 0L) * 60_000 + (startS.toLongOrNull() ?: 0L) * 1000
+                    val b = (endM.toLongOrNull() ?: 0L) * 60_000 + (endS.toLongOrNull() ?: 0L) * 1000
+                    // A trim that covers the whole track is just a normal download.
+                    val trimmed = b > a && b < t.durationMs
+                    vm.downloadTrack(t, playlist = null, startMs = if (trimmed) a else 0L, endMs = if (trimmed) b else 0L)
+                    dlTrack = null
+                }) { Text("Unduh") }
+            },
+            dismissButton = { TextButton(onClick = { dlTrack = null }) { Text("Batal") } },
+        )
+    }
+
+    newPl?.let { t ->
             AlertDialog(
                 onDismissRequest = { newPl = null; newPlName = "" },
                 title = { Text("Playlist baru") },
@@ -328,6 +384,8 @@ fun Root(vm: LoomViewModel) {
                     onClose = vm::closeLyrics,
                     onToggle = vm::togglePlay,
                     onSkip = vm::skip,
+                    offset = state.lyricOffsets[t.id] ?: 0.0,
+                    onOffset = vm::setLyricOffset,
                 )
             }
         }
@@ -362,7 +420,7 @@ private fun HomeScreen(
                     }
                 }
                 itemsIndexed(state.topTracks, key = { _, t -> "ht" + t.id }) { i, t ->
-                    NumberedTrackRow(i + 1, t, state.current?.id == t.id, onPlay = { onPlay(t, state.topTracks) }, onLike = { onLike(t) }, onMenu = { onMenu(t) })
+                    NumberedTrackRow(i + 1, t, state.current?.id == t.id, liked = state.liked.any { it.id == t.id && it.source == t.source }, onPlay = { onPlay(t, state.topTracks) }, onLike = { onLike(t) }, onMenu = { onMenu(t) })
                 }
             }
             items(state.shelves, key = { "hs" + it.title }) { shelf -> ShelfRow(shelf.title, shelf.items, onOpen) }
@@ -398,7 +456,7 @@ private fun ForYouScreen(
                 }
             }
             itemsIndexed(state.forYouTracks, key = { _, t -> "fy" + t.id }) { i, t ->
-                NumberedTrackRow(i + 1, t, state.current?.id == t.id, onPlay = { onPlay(t, state.forYouTracks) }, onLike = { onLike(t) }, onMenu = { onMenu(t) })
+                NumberedTrackRow(i + 1, t, state.current?.id == t.id, liked = state.liked.any { it.id == t.id && it.source == t.source }, onPlay = { onPlay(t, state.forYouTracks) }, onLike = { onLike(t) }, onMenu = { onMenu(t) })
             }
         }
         items(state.forYou, key = { "fs" + it.title }) { shelf -> ShelfRow(shelf.title, shelf.items, onOpen) }
@@ -422,6 +480,8 @@ private fun QueueScreen(
     onImportInput: (String) -> Unit,
     onImportRun: (String) -> Unit,
     onImportClose: () -> Unit,
+    onPlayFile: (dev.loom.core.Downloaded) -> Unit,
+    onRemoveFile: (dev.loom.core.Downloaded) -> Unit,
 ) {
     var naming by remember { mutableStateOf(false) }
     var importing by remember { mutableStateOf(false) }
@@ -476,14 +536,14 @@ private fun QueueScreen(
                 item { EmptyState("Nothing played yet", "Anything you play lands here.") }
             } else {
                 items(state.history, key = { "h" + it.source.name + it.id }) { t ->
-                    TrackRow(t, state.current?.id == t.id, onLike = { onLike(t) }) { onPlay(t, state.history) }
+                    TrackRow(t, state.current?.id == t.id, liked = state.liked.any { it.id == t.id && it.source == t.source }, onLike = { onLike(t) }) { onPlay(t, state.history) }
                 }
             }
             Lib.LIKED -> if (state.liked.isEmpty()) {
                 item { EmptyState("No likes yet", "Tap the heart on any row.") }
             } else {
                 items(state.liked, key = { "l" + it.source.name + it.id }) { t ->
-                    TrackRow(t, state.current?.id == t.id, onLike = { onLike(t) }) { onPlay(t, state.liked) }
+                    TrackRow(t, state.current?.id == t.id, liked = state.liked.any { it.id == t.id && it.source == t.source }, onLike = { onLike(t) }) { onPlay(t, state.liked) }
                 }
             }
             Lib.WEEKLY -> if (state.weekly.isEmpty()) {
@@ -491,14 +551,28 @@ private fun QueueScreen(
             } else {
                 item { Caption("Built from the artists you played this week") }
                 items(state.weekly, key = { "w" + it.source.name + it.id }) { t ->
-                    TrackRow(t, state.current?.id == t.id, onLike = { onLike(t) }) { onPlay(t, state.weekly) }
+                    TrackRow(t, state.current?.id == t.id, liked = state.liked.any { it.id == t.id && it.source == t.source }, onLike = { onLike(t) }) { onPlay(t, state.weekly) }
+                }
+            }
+            Lib.DOWNLOADS -> if (state.downloads.isEmpty()) {
+                item { EmptyState("Belum ada unduhan", "Unduh satu lagu dari menu titik tiga, atau satu playlist dari halaman playlist.") }
+            } else {
+                state.downloads.forEach { (folder, files) ->
+                    item {
+                        SectionTitle(folder ?: "Lagu lepas", files.size)
+                    }
+                    items(files, key = { "dl" + it.uri }) { f ->
+                        // Offline rows are plain files; the title comes from the filename, which
+                        // was written from the track at download time.
+                        DownloadedRow(f, onPlay = { onPlayFile(f) }, onRemove = { onRemoveFile(f) })
+                    }
                 }
             }
             Lib.QUEUE -> if (state.queue.isEmpty()) {
                 item { EmptyState("No queue yet", "Open a playlist from Home, or play a search result.") }
             } else {
                 items(state.queue, key = { "q" + it.source.name + it.id }) { t ->
-                    TrackRow(t, state.current?.id == t.id, onLike = { onLike(t) }) { onPlay(t, state.queue) }
+                    TrackRow(t, state.current?.id == t.id, liked = state.liked.any { it.id == t.id && it.source == t.source }, onLike = { onLike(t) }) { onPlay(t, state.queue) }
                 }
             }
         }
@@ -612,10 +686,13 @@ private fun PlaylistDetail(
     onRemoveTrack: (Track) -> Unit,
     onRename: (String) -> Unit,
     onDelete: () -> Unit,
+    onSave: () -> Unit,
+    onDownloadAll: () -> Unit,
 ) {
     val open = state.openHere ?: return
     val title = open.title
     val tracks = open.tracks
+    val saved = open.collection?.let { c -> state.saved.any { it.id == c.id } } == true
     var renaming by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var draft by remember { mutableStateOf(title) }
@@ -632,6 +709,21 @@ private fun PlaylistDetail(
                 }
                 IconButton(onClick = { confirmDelete = true }) {
                     Icon(Icons.Rounded.Delete, contentDescription = "Delete playlist")
+                }
+            } else if (open.collection != null) {
+                // Provider playlists opened from Home / For You can be kept in the library.
+                IconButton(onClick = onSave) {
+                    Icon(
+                        if (saved) Icons.Rounded.Bookmark else Icons.Rounded.BookmarkBorder,
+                        contentDescription = if (saved) "Hapus dari koleksi" else "Simpan playlist",
+                        tint = if (saved) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            // Any playlist with tracks can be taken offline, local or provider.
+            if (tracks.isNotEmpty()) {
+                IconButton(onClick = onDownloadAll) {
+                    Icon(Icons.Rounded.Download, contentDescription = "Unduh playlist")
                 }
             }
         }
@@ -656,6 +748,7 @@ private fun PlaylistDetail(
                         rank = i + 1,
                         t = t,
                         selected = state.current?.id == t.id,
+                        liked = state.liked.any { it.id == t.id && it.source == t.source },
                         onPlay = { onPlay(t, tracks) },
                         onLike = { onLike(t) },
                         onMenu = { onLike(t) },
@@ -886,12 +979,74 @@ fun TrackSkeleton() {
     }
 }
 
+/** Two small number fields for mm / ss, used by the download trim dialog. */
+@Composable
+private fun MinuteSecondField(minute: String, second: String, onChange: (String, String) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(
+            value = minute,
+            onValueChange = { v -> if (v.length <= 3 && v.all { it.isDigit() }) onChange(v, second) },
+            label = { Text("menit") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.width(96.dp),
+        )
+        Text(" : ", style = MaterialTheme.typography.titleMedium)
+        OutlinedTextField(
+            value = second,
+            onValueChange = { v -> if (v.length <= 2 && v.all { it.isDigit() }) onChange(minute, v) },
+            label = { Text("detik") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.width(96.dp),
+        )
+    }
+}
+
+/** A file on disk: no track metadata survives a download, so the filename is the title. */
+@Composable
+private fun DownloadedRow(f: dev.loom.core.Downloaded, onPlay: () -> Unit, onRemove: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onPlay)
+            .padding(start = 10.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(52.dp).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Rounded.DownloadDone, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                f.title,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                "Offline · " + dev.loom.core.Downloads.sizeText(f.sizeBytes),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        IconButton(onClick = onRemove, modifier = Modifier.size(40.dp)) {
+            Icon(Icons.Rounded.Delete, contentDescription = "Hapus unduhan", modifier = Modifier.size(19.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
 /** A track row with a rank number and a three-dot menu, for the playable lists on Home/For You. */
 @Composable
 fun NumberedTrackRow(
     rank: Int,
     t: Track,
     selected: Boolean,
+    liked: Boolean = false,
     onPlay: () -> Unit,
     onLike: () -> Unit,
     onMenu: () -> Unit,
@@ -938,10 +1093,10 @@ fun NumberedTrackRow(
         }
         IconButton(onClick = onLike, modifier = Modifier.size(38.dp)) {
             Icon(
-                Icons.Rounded.FavoriteBorder,
-                contentDescription = "Like",
+                if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                contentDescription = if (liked) "Unlike" else "Like",
                 modifier = Modifier.size(18.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = if (liked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         IconButton(onClick = onMenu, modifier = Modifier.size(38.dp)) {
@@ -984,9 +1139,10 @@ fun TrackActionsSheet(
     onCreate: () -> Unit,
     onShare: () -> Unit,
     onArtist: () -> Unit,
+    onDownload: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface) {
-        TrackActionsBody(track, liked, playlists, onDismiss, onPlayNext, onQueue, onLike, onSaveTo, onCreate, onShare, onArtist)
+        TrackActionsBody(track, liked, playlists, onDismiss, onPlayNext, onQueue, onLike, onSaveTo, onCreate, onShare, onArtist, onDownload)
     }
 }
 
@@ -1004,6 +1160,7 @@ fun TrackActionsBody(
     onCreate: () -> Unit,
     onShare: () -> Unit,
     onArtist: () -> Unit,
+    onDownload: () -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1045,6 +1202,7 @@ fun TrackActionsBody(
             // The menu is where a user decides a track belongs somewhere; creating the target here
             // avoids backing out to the library first.
             SheetRow("Buat playlist baru", Icons.Rounded.Add) { onCreate() }
+            SheetRow("Unduh lagu", Icons.Rounded.Download) { onDownload() }
             SheetRow("Buka halaman artis", Icons.Rounded.Person) { onArtist() }
         }
 }
@@ -1160,7 +1318,7 @@ private fun SearchScreen(
                 if (state.searchPlayed.isNotEmpty()) {
                     item { SectionTitle("Recently played", state.searchPlayed.size) }
                     items(state.searchPlayed, key = { "sp" + it.source.name + it.id }) { t ->
-                        TrackRow(t, selected = state.current?.id == t.id, onLike = { onLike(t) }) { onPlay(t) }
+                        TrackRow(t, selected = state.current?.id == t.id, liked = state.liked.any { it.id == t.id && it.source == t.source }, onLike = { onLike(t) }) { onPlay(t) }
                     }
                 }
                 if (state.queries.isEmpty() && state.searchPlayed.isEmpty()) {
@@ -1171,7 +1329,7 @@ private fun SearchScreen(
             else -> LazyColumn(contentPadding = PaddingValues(bottom = 190.dp)) {
                 item { SectionTitle("Results", state.results.size) }
                 items(state.results, key = { it.source.name + it.id }) { t ->
-                    TrackRow(t, selected = state.current?.id == t.id, onLike = { onLike(t) }) { onPlay(t) }
+                    TrackRow(t, selected = state.current?.id == t.id, liked = state.liked.any { it.id == t.id && it.source == t.source }, onLike = { onLike(t) }) { onPlay(t) }
                 }
             }
         }

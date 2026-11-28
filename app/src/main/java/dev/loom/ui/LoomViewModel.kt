@@ -7,6 +7,7 @@ import dev.loom.core.Collection
 import dev.loom.core.Music
 import dev.loom.core.Shelf
 import dev.loom.core.Source
+import dev.loom.core.Downloads
 import dev.loom.core.Store
 import dev.loom.core.Track
 import dev.loom.theme.Mode
@@ -41,6 +42,7 @@ enum class Tab(val label: String) {
 /** Tabs inside Playlist: saved collections, history, likes, weekly picks, the live queue. */
 enum class Lib(val label: String) {
     PLAYLISTS("Playlist"),
+    DOWNLOADS("Download"),
     HISTORY("History"),
     LIKED("Liked"),
     WEEKLY("Weekly"),
@@ -48,7 +50,13 @@ enum class Lib(val label: String) {
 }
 
 /** A page opened above a tab: a provider playlist, or one of the user's own (`local`). */
-data class OpenPlaylist(val title: String, val tracks: List<Track>, val local: Boolean = false)
+data class OpenPlaylist(
+    val title: String,
+    val tracks: List<Track>,
+    val local: Boolean = false,
+    /** The shelf card that opened this page, so it can be saved from inside. Null for local ones. */
+    val collection: Collection? = null,
+)
 
 data class UiState(
     val tab: Tab = Tab.HOME,
@@ -68,6 +76,13 @@ data class UiState(
     /** Track the current `lyrics` belong to; null means nothing fetched yet. */
     val lyricsFor: String? = null,
     val syncedLyrics: List<dev.loom.core.LyricLine> = emptyList(),
+    /** Per-track lyrics shift in seconds; survives track changes within the session. */
+    val lyricOffsets: Map<String, Double> = emptyMap(),
+    /** Downloaded files grouped by playlist folder; null key = loose tracks. */
+    val downloads: Map<String?, List<dev.loom.core.Downloaded>> = emptyMap(),
+    /** 0f..1f while a download runs, null when idle. */
+    val downloadProgress: Float? = null,
+    val downloading: String? = null,
     /** Equalizer preset name; applied by the player service. */
     val eq: String = "Flat",
     /** Lyrics take over the whole screen instead of swapping into the cover box. */
@@ -96,9 +111,12 @@ data class UiState(
 }
 
 class LoomViewModel(app: Application) : AndroidViewModel(app) {
+    private val app = app
     private val store = Store(app)
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
+
+    init { observeDownloads() }
 
     private val _theme = MutableStateFlow(ThemeState())
     val theme: StateFlow<ThemeState> = _theme.asStateFlow()
@@ -130,9 +148,14 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
             queue = store.queue,
             index = store.queueIndex.coerceIn(-1, store.queue.lastIndex),
         )
-        loadHome()
-        loadForYou()
-        loadWeekly()
+        // Only the visible tab loads at startup. Fetching all three meant a cold start pulled
+        // hundreds of covers while the user was still on Home, which is what made the player
+        // stutter and sometimes stop when a second tab was opened.
+        when (_state.value.tab) {
+            Tab.HOME -> loadHome()
+            Tab.FOR_YOU -> loadForYou()
+            else -> Unit
+        }
     }
 
     fun setTab(t: Tab) {
@@ -147,6 +170,7 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
         when (t) {
             Tab.HOME -> if (_state.value.shelves.isEmpty()) loadHome()
             Tab.FOR_YOU -> if (_state.value.forYou.isEmpty()) loadForYou()
+            Tab.PLAYLIST -> if (_state.value.weekly.isEmpty()) loadWeekly()
             else -> Unit
         }
     }
@@ -179,9 +203,12 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
             // generic Explore page when there is no history yet.
             val res = withContext(Dispatchers.IO) {
                 val seeds = store.history.distinctBy { it.artist }.take(4)
+                // Four radios, each returning its own long list: unbounded, this page pulled
+                // hundreds of tracks and their covers and took seconds to open. Twelve per seed
+                // keeps the variety across artists while bounding both the fetch and the scroll.
                 val personalised = seeds.map { seed ->
-                    async { runCatching { Music.radio(seed) }.getOrDefault(emptyList()) }
-                }.awaitAll().flatten().distinctBy { it.id }
+                    async { runCatching { Music.radio(seed) }.getOrDefault(emptyList()).take(12) }
+                }.awaitAll().flatten().distinctBy { it.id }.take(40)
                 personalised to runCatching { Music.forYou() }.getOrDefault(emptyList())
             }
             val (mine, generic) = res
@@ -231,7 +258,7 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
         // and the screen can show its own skeleton instead of a spinner over the old list.
         val tab = _state.value.tab
         _state.value = _state.value.copy(
-            openPlaylist = _state.value.openPlaylist + (tab to OpenPlaylist(c.title, emptyList())),
+            openPlaylist = _state.value.openPlaylist + (tab to OpenPlaylist(c.title, emptyList(), collection = c)),
             loading = true,
             error = null,
         )
@@ -240,7 +267,7 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = res.fold(
                 onSuccess = { tracks ->
                     _state.value.copy(
-                        openPlaylist = _state.value.openPlaylist + (tab to OpenPlaylist(c.title, tracks)),
+                        openPlaylist = _state.value.openPlaylist + (tab to OpenPlaylist(c.title, tracks, collection = c)),
                         loading = false,
                     )
                 },
@@ -405,6 +432,71 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
 
     fun isLiked(track: Track): Boolean = _state.value.liked.any { it.id == track.id && it.source == track.source }
 
+    /** Refresh the Download tab from disk. Cheap: one directory listing per playlist folder. */
+    fun refreshDownloads() {
+        _state.value = _state.value.copy(downloads = Downloads.all(app))
+    }
+
+    /**
+     * One track, optionally trimmed to [startMs]..[endMs]. A trimmed copy is a real cut file, not
+     * a marker, so it still plays if the user copies it off the phone.
+     */
+    fun downloadTrack(t: Track, playlist: String? = null, startMs: Long = 0, endMs: Long = 0) {
+        if (_state.value.downloading != null) return
+        _state.value = _state.value.copy(downloading = t.title, downloadProgress = 0f)
+        viewModelScope.launch {
+            val res = runCatching {
+                Downloads.download(app, t, playlist, startMs, endMs) { p ->
+                    _state.value = _state.value.copy(downloadProgress = p)
+                }
+            }
+            _state.value = _state.value.copy(
+                downloading = null,
+                downloadProgress = null,
+                downloads = Downloads.all(app),
+                error = res.exceptionOrNull()?.let { "Gagal mengunduh: " + it.short() },
+            )
+        }
+    }
+
+    /**
+     * A whole playlist goes to DownloadService: a 50-track run outlives a screen, and
+     * `viewModelScope` would be cancelled the moment the app is backgrounded.
+     */
+    fun downloadPlaylist(name: String, tracks: List<Track>) {
+        dev.loom.player.DownloadService.start(app, tracks, name)
+    }
+
+    /** Mirrors the service's progress into UI state and refreshes the tab when it finishes. */
+    private fun observeDownloads() {
+        viewModelScope.launch {
+            dev.loom.player.DownloadService.progress.collect { p ->
+                _state.value = _state.value.copy(
+                    downloading = p.title?.let { "${p.done + 1}/${p.total} $it" },
+                    downloadProgress = p.fraction,
+                )
+            }
+        }
+        viewModelScope.launch {
+            dev.loom.player.DownloadService.finished.collect { done ->
+                if (done) _state.value = _state.value.copy(downloads = Downloads.all(app))
+            }
+        }
+    }
+
+    /** Plays a downloaded file directly; no stream resolve is involved. */
+    fun playFile(d: dev.loom.core.Downloaded) {
+        onPlayFile?.invoke(d)
+    }
+
+    fun removeDownloadFile(d: dev.loom.core.Downloaded) {
+        Downloads.remove(app, d.uri)
+        refreshDownloads()
+    }
+
+    /** Wired by Playback: hands a downloaded file to the player. */
+    var onPlayFile: ((dev.loom.core.Downloaded) -> Unit)? = null
+
     fun toggleSaved(c: Collection) {
         store.toggleSaved(c)
         _state.value = _state.value.copy(saved = store.saved)
@@ -419,6 +511,14 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
      * Lyrics belong to a track, not to the player. Guarding on `lyrics != null` alone left the
      * previous song's words on screen after a skip, so the guard is keyed on the track id.
      */
+    /** Shift every lyrics timestamp for the current track; lrclib edits drift by seconds. */
+    fun setLyricOffset(seconds: Double) {
+        val id = _state.value.current?.id ?: return
+        _state.value = _state.value.copy(lyricOffsets = _state.value.lyricOffsets + (id to seconds))
+    }
+
+    fun lyricOffset(): Double = _state.value.current?.let { _state.value.lyricOffsets[it.id] } ?: 0.0
+
     fun loadLyrics() {
         val t = _state.value.current ?: return
         if (_state.value.lyricsFor == t.id) return
@@ -576,15 +676,38 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
         onShuffle?.invoke(_state.value.shuffle)
     }
 
+    /** Fired by the player whenever it actually starts or stops producing audio. */
+    fun onPlayingChanged(isPlaying: Boolean) {
+        if (_state.value.playing == isPlaying) return
+        _state.value = _state.value.copy(playing = isPlaying)
+    }
+
     fun togglePlay() {
         val s = _state.value
         if (s.current == null) return
-        if (s.playing) { onPause?.invoke(); _state.value = s.copy(playing = false) }
-        else {
-            // A finished player ignores play(); restart it instead of silently doing nothing.
-            onResume?.invoke()
-            _state.value = s.copy(playing = true)
-        }
+        // No optimistic flip here: `onPlayingChanged` reports the real result, so a request the
+        // player refuses cannot leave the button lying about the state.
+        if (s.playing) onPause?.invoke() else onResume?.invoke()
+    }
+
+    /**
+     * Called when the player itself moved to another item — the notification's next/prev, or an
+     * automatic advance. The UI state has to follow without re-resolving the stream.
+     */
+    fun onPlayerMoved(t: Track, automatic: Boolean) {
+        val s = _state.value
+        val idx = s.queue.indexOfFirst { it.id == t.id && it.source == t.source }
+        // `current` is derived from queue+index, so moving the index is what changes the track.
+        _state.value = s.copy(
+            index = if (idx >= 0) idx else s.index,
+            playing = true,
+        )
+        store.saveQueue(s.queue, if (idx >= 0) idx else s.index)
+        store.addHistory(t)
+        if (!automatic && s.tab == Tab.SEARCH) store.addSearchPlayed(t)
+        _state.value = _state.value.copy(history = store.history, searchPlayed = store.searchPlayed)
+        // Lyrics are keyed to the track id, so a new item needs a new fetch.
+        if (_state.value.lyricsFor != t.id) loadLyrics()
     }
 
     /** `byUser` false when the player advanced on its own rather than a button press. */
