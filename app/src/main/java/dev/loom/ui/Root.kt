@@ -165,7 +165,15 @@ fun Root(vm: LoomViewModel) {
 
     Box(Modifier.fillMaxSize().background(ambientBrush(accent, accent2))) {
         // hazeSource marks this subtree as the thing the glass chrome blurs.
-        Box(Modifier.fillMaxSize().statusBarsPadding().hazeSource(haze)) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                // The island floats over this subtree, so its height is reserved here instead of
+                // letting it sit on top of the first header.
+                .padding(top = if (state.current != null) 60.dp else 0.dp)
+                .hazeSource(haze),
+        ) {
             tabStates.SaveableStateProvider(state.tab.name) {
                 val open = state.openHere
                 if (open != null) {
@@ -273,7 +281,6 @@ fun Root(vm: LoomViewModel) {
                     resolving = state.resolving,
                     positionMs = position.first,
                     durationMs = position.second,
-                    haze = haze,
                     onToggle = vm::togglePlay,
                     onSkip = vm::skip,
                     onOpenLyrics = { vm.openLyrics() },
@@ -647,7 +654,7 @@ private fun TrackCarousel(
         contentPadding = PaddingValues(horizontal = 18.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        items(tracks, key = { it.source.name + it.id }) { t ->
+        itemsIndexed(tracks) { _, t ->
             Column(
                 Modifier
                     .width(132.dp)
