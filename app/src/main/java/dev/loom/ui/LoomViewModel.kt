@@ -14,6 +14,7 @@ import dev.loom.theme.Mode
 import dev.loom.theme.Palette
 import dev.loom.theme.ThemeState
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -70,6 +71,10 @@ data class UiState(
     val queries: List<String> = emptyList(),
     /** Tracks the user picked from Search; separate from `history`, which is everything played. */
     val searchPlayed: List<Track> = emptyList(),
+    /** The search page is a separate screen: bar, title history, and suggestions while typing. */
+    val searchOpen: Boolean = false,
+    /** Titles offered while typing; from one YouTube Music lookup, not all four sources. */
+    val suggest: List<String> = emptyList(),
     val lib: Lib = Lib.PLAYLISTS,
     val playlists: List<dev.loom.core.NamedPlaylist> = emptyList(),
     val lyrics: String? = null,
@@ -83,6 +88,8 @@ data class UiState(
     /** 0f..1f while a download runs, null when idle. */
     val downloadProgress: Float? = null,
     val downloading: String? = null,
+    /** Live bytes/size/speed for the running download; null when idle. */
+    val downloadSample: dev.loom.core.Downloads.Sample? = null,
     /** Equalizer preset name; applied by the player service. */
     val eq: String = "Flat",
     /** Lyrics take over the whole screen instead of swapping into the cover box. */
@@ -291,8 +298,28 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
     fun setQuery(q: String) {
         // Clearing the box returns to the history/recent view instead of a stale result list.
         _state.value = if (q.isBlank()) {
-            _state.value.copy(query = q, results = emptyList(), searched = false)
+            _state.value.copy(query = q, results = emptyList(), searched = false, suggest = emptyList())
         } else _state.value.copy(query = q)
+        suggestJob?.cancel()
+        if (q.isBlank() || !_state.value.searchOpen) return
+        // Debounced: one lookup per pause, not one per keystroke.
+        suggestJob = viewModelScope.launch {
+            delay(320)
+            val hits = withContext(Dispatchers.IO) {
+                runCatching { Music.search(q.trim(), Source.YT_MUSIC) }.getOrDefault(emptyList())
+            }
+            if (_state.value.query == q) {
+                _state.value = _state.value.copy(suggest = hits.map { it.title }.distinct().take(8))
+            }
+        }
+    }
+
+    private var suggestJob: kotlinx.coroutines.Job? = null
+
+    fun openSearch() { _state.value = _state.value.copy(searchOpen = true) }
+
+    fun closeSearch() {
+        _state.value = _state.value.copy(searchOpen = false, query = "", suggest = emptyList(), searched = false)
     }
 
     /**
@@ -446,13 +473,16 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(downloading = t.title, downloadProgress = 0f)
         viewModelScope.launch {
             val res = runCatching {
-                Downloads.download(app, t, playlist, startMs, endMs) { p ->
-                    _state.value = _state.value.copy(downloadProgress = p)
-                }
+                Downloads.download(
+                    app, t, playlist, startMs, endMs,
+                    onProgress = { p -> _state.value = _state.value.copy(downloadProgress = p) },
+                    onSample = { s -> _state.value = _state.value.copy(downloadSample = s) },
+                )
             }
             _state.value = _state.value.copy(
                 downloading = null,
                 downloadProgress = null,
+                downloadSample = null,
                 downloads = Downloads.all(app),
                 error = res.exceptionOrNull()?.let { "Gagal mengunduh: " + it.short() },
             )
@@ -474,6 +504,7 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
                 _state.value = _state.value.copy(
                     downloading = p.title?.let { "${p.done + 1}/${p.total} $it" },
                     downloadProgress = p.fraction,
+                    downloadSample = p.sample,
                 )
             }
         }

@@ -37,7 +37,18 @@ class PlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
+        // Tapping the notification body (not the buttons, which keep their own commands) must land
+        // in the app on the current track, not on whatever tab was last open.
+        val open = android.app.PendingIntent.getActivity(
+            this,
+            0,
+            android.content.Intent(this, dev.loom.MainActivity::class.java)
+                .setAction(dev.loom.MainActivity.ACTION_OPEN_PLAYER)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE,
+        )
         session = MediaSession.Builder(this, buildPlayer(this))
+            .setSessionActivity(open)
             // The notification's -10s/+10s buttons are custom commands, because the standard
             // media layout only offers prev/play/next. Sent as a relative seek in milliseconds.
             .setCallback(object : MediaSession.Callback {

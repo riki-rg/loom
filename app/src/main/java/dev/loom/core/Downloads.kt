@@ -108,6 +108,7 @@ object Downloads {
         startMs: Long = 0,
         endMs: Long = 0,
         onProgress: (Float) -> Unit = {},
+        onSample: (Sample) -> Unit = {},
     ): Uri = withContext(Dispatchers.IO) {
         // Re-downloading a playlist must not leave two copies of every track in the library.
         if (!(endMs > startMs)) {
@@ -122,7 +123,7 @@ object Downloads {
         val raw = scratch?.let { File(it, "src.m4a") }
         val target = raw ?: File(ctx.cacheDir, "dl-direct.m4a")
 
-        fetch(stream.url, stream.userAgent, target, onProgress)
+        fetch(stream.url, stream.userAgent, target, onProgress, onSample)
         val finished = if (needsTrim) {
             val cut = File(scratch, "cut.m4a")
             trim(ctx, target, cut, startMs, endMs)
@@ -151,7 +152,23 @@ object Downloads {
             )
         } else null }
 
-    private fun fetch(url: String, ua: String, into: File, onProgress: (Float) -> Unit) {
+    /**
+     * One progress reading: how many bytes are in, how big the file is, and how fast it is going.
+     * `total` is 0 when the CDN sends no Content-Length, which the UI must treat as unknown.
+     */
+    data class Sample(val bytes: Long, val total: Long, val bytesPerSecond: Long) {
+        /** Seconds left, or null while the size or the speed is still unknown. */
+        val etaSeconds: Long?
+            get() = if (total > 0 && bytesPerSecond > 0) (total - bytes) / bytesPerSecond else null
+    }
+
+    private fun fetch(
+        url: String,
+        ua: String,
+        into: File,
+        onProgress: (Float) -> Unit,
+        onSample: (Sample) -> Unit = {},
+    ) {
         val conn = java.net.URL(url).openConnection().apply {
             setRequestProperty("User-Agent", ua.ifBlank { "Mozilla/5.0" })
             setRequestProperty("Referer", "https://music.youtube.com/")
@@ -164,13 +181,27 @@ object Downloads {
             into.outputStream().use { out ->
                 val buf = ByteArray(64 * 1024)
                 var done = 0L
+                // Speed is measured over the last second, not since the start: a slow handshake
+                // would otherwise drag the average down for the whole download.
+                var windowStart = System.nanoTime()
+                var windowBytes = 0L
+                var speed = 0L
                 while (true) {
                     val n = input.read(buf)
                     if (n < 0) break
                     out.write(buf, 0, n)
                     done += n
+                    windowBytes += n
+                    val elapsed = System.nanoTime() - windowStart
+                    if (elapsed >= 400_000_000L) {
+                        speed = (windowBytes * 1_000_000_000L / elapsed)
+                        windowStart = System.nanoTime()
+                        windowBytes = 0L
+                        onSample(Sample(done, total, speed))
+                    }
                     if (total > 0) onProgress((done.toFloat() / total).coerceIn(0f, 1f))
                 }
+                onSample(Sample(done, if (total > 0) total else done, speed))
             }
         }
         if (into.length() == 0L) error("download produced no data")

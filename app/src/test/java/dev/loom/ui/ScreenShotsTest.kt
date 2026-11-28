@@ -6,6 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Column
@@ -206,5 +207,47 @@ class ScreenShotsTest {
         val s = ThemeState()
         assertTrue("default mode must be light", s.mode == Mode.LIGHT)
         assertTrue("default accent must be blue", s.palette.label == "Cobalt")
+    }
+
+    /** The player's single three-dot entry, plus the extras it now carries. */
+    @Test
+    fun actionsSheetWithPlayerExtras() = shoot("actions-sheet-player") {
+        TrackActionsBody(
+            track = track,
+            liked = true,
+            playlists = listOf("Favorit"),
+            onDismiss = {},
+            onPlayNext = {},
+            onQueue = {},
+            onLike = {},
+            onSaveTo = {},
+            onCreate = {},
+            onShare = {},
+            onArtist = {},
+            onDownload = {},
+            player = PlayerActions(
+                shuffle = true,
+                repeat = false,
+                eq = "Bass",
+                onShuffle = {},
+                onRepeat = {},
+                onEq = {},
+            ),
+        )
+    }
+
+    /** Live download row: percent, bytes, speed and the estimate on one line. */
+    @Test
+    fun downloadProgressRow() = shoot("download-live") {
+        Column(Modifier.fillMaxSize().padding(16.dp)) {
+            Text("Negoro Angin", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(8.dp))
+            androidx.compose.material3.LinearProgressIndicator(
+                progress = { 0.42f },
+                modifier = Modifier.fillMaxWidth().height(6.dp),
+            )
+            Spacer(Modifier.height(6.dp))
+            Text("42% · 1.9 MB / 4.5 MB · 820 KB/s · sisa 4 dtk", style = MaterialTheme.typography.bodySmall)
+        }
     }
 }

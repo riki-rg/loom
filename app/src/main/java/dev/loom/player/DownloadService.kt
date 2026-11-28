@@ -45,14 +45,21 @@ class DownloadService : Service() {
         startForeground(NOTIF_ID, notification("Menyiapkan unduhan", 0, tracks.size, indeterminate = true))
         job = scope.launch {
             var done = 0
+            var sample: Downloads.Sample? = null
             for (t in tracks) {
+                sample = null
                 progress.value = Progress("${done + 1}/${tracks.size} ${t.title}", done, tracks.size, 0f)
                 notify(notification(t.title, done, tracks.size, indeterminate = false, sub = "${done + 1}/${tracks.size}"))
                 runCatching {
-                    Downloads.download(applicationContext, t, playlist) { p ->
-                        progress.value = Progress(t.title, done, tracks.size, p)
-                        notify(notification(t.title, done, tracks.size, indeterminate = false, sub = "${done + 1}/${tracks.size}", fraction = p))
-                    }
+                    Downloads.download(
+                        applicationContext, t, playlist,
+                        onProgress = { p ->
+                            progress.value = Progress(t.title, done, tracks.size, p, sample)
+                            notify(notification(t.title, done, tracks.size, indeterminate = false, sub = "${done + 1}/${tracks.size}", fraction = p, sample = sample))
+                        },
+                        // One reading per ~400ms: enough for a live bar, cheap enough to ignore.
+                        onSample = { s -> sample = s },
+                    )
                 }
                 done++
             }
@@ -80,6 +87,7 @@ class DownloadService : Service() {
         indeterminate: Boolean,
         sub: String = "",
         fraction: Float = 0f,
+        sample: Downloads.Sample? = null,
     ): Notification {
         ensureChannel()
         // One bar per track, so a 50-track playlist visibly advances instead of sitting at 0.
@@ -88,11 +96,28 @@ class DownloadService : Service() {
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle(if (total > 1) "Mengunduh playlist ($done/$total)" else "Mengunduh lagu")
             .setContentText(title + if (sub.isNotEmpty()) " · $sub" else "")
+            .setSubText(sample?.let { human(it) } ?: "")
             .setProgress(100, pct, indeterminate)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
+    }
+
+    /** "1.2 MB / 4.5 MB · 820 KB/s · sisa 4 detik" — the same numbers the Download tab shows. */
+    private fun human(s: Downloads.Sample): String {
+        val parts = mutableListOf(
+            if (s.total > 0) "${size(s.bytes)} / ${size(s.total)}" else size(s.bytes),
+        )
+        if (s.bytesPerSecond > 0) parts += "${size(s.bytesPerSecond)}/s"
+        s.etaSeconds?.let { parts += "sisa ${if (it < 60) "$it dtk" else "${it / 60} mnt"}" }
+        return parts.joinToString(" · ")
+    }
+
+    private fun size(b: Long): String = when {
+        b >= 1_048_576 -> String.format(java.util.Locale.US, "%.1f MB", b / 1048576.0)
+        b >= 1024 -> "${b / 1024} KB"
+        else -> "$b B"
     }
 
     private fun ensureChannel() {
@@ -120,7 +145,13 @@ class DownloadService : Service() {
         val progress = MutableStateFlow(Progress(null, 0, 0, 0f))
         val finished = MutableStateFlow(false)
 
-        data class Progress(val title: String?, val done: Int, val total: Int, val fraction: Float)
+        data class Progress(
+            val title: String?,
+            val done: Int,
+            val total: Int,
+            val fraction: Float,
+            val sample: Downloads.Sample? = null,
+        )
 
         /** Kicks off a playlist download. Tracks travel as JSON: small, and no Parcelable plumbing. */
         fun start(ctx: Context, tracks: List<Track>, playlist: String?) {

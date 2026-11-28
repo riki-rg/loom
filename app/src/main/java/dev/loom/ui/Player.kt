@@ -39,6 +39,7 @@ import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PlaylistAdd
 import androidx.compose.material.icons.rounded.Repeat
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.Replay10
 import androidx.compose.material.icons.rounded.Forward10
@@ -105,6 +106,7 @@ fun NowPlayingSheet(
     onPlayTrack: (Track) -> Unit,
     onAddToPlaylist: (String) -> Unit,
     onCreatePlaylist: (String) -> Unit,
+    onMore: () -> Unit,
 ) {
     val t = state.current ?: return
     var picker by remember { mutableStateOf(false) }
@@ -229,46 +231,27 @@ fun NowPlayingSheet(
             }
 
             Spacer(Modifier.height(18.dp))
-            // The row every player has: shuffle, repeat, like, add to playlist.
+            // One entry point for every track action. Five icon buttons here were cramped and
+            // duplicated what the three-dot sheet already offers; the sheet is the single home now.
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = { onShuffle() }) {
-                    Icon(
-                        Icons.Rounded.Shuffle,
-                        contentDescription = if (shuffle) "Shuffle on" else "Shuffle off",
-                        modifier = Modifier.size(21.dp),
-                        tint = if (shuffle) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                IconButton(onClick = { onRepeat() }) {
-                    Icon(
-                        Icons.Rounded.Repeat,
-                        contentDescription = "Repeat ${if (repeat) "on" else "off"}",
-                        modifier = Modifier.size(21.dp),
-                        tint = if (repeat) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
                 IconButton(onClick = onLike) {
                     Icon(
                         if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
                         contentDescription = if (liked) "Unlike" else "Like",
-                        modifier = Modifier.size(22.dp),
+                        modifier = Modifier.size(23.dp),
                         tint = if (liked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                IconButton(onClick = { picker = true }) {
-                    Icon(Icons.Rounded.PlaylistAdd, contentDescription = "Add to playlist", modifier = Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                IconButton(onClick = { eqPicker = true }) {
+                IconButton(onClick = onMore) {
                     Icon(
-                        Icons.Rounded.Equalizer,
-                        contentDescription = "Equalizer, $eq",
-                        modifier = Modifier.size(22.dp),
-                        tint = if (eq == "Flat") MaterialTheme.colorScheme.onSurfaceVariant
-                        else MaterialTheme.colorScheme.primary,
+                        Icons.Rounded.MoreVert,
+                        contentDescription = "Opsi lagu",
+                        modifier = Modifier.size(23.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }

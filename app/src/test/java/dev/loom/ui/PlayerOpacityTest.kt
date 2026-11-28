@@ -78,6 +78,7 @@ class PlayerOpacityTest {
                         onPlayTrack = {},
                         onAddToPlaylist = {},
                         onCreatePlaylist = {},
+                        onMore = {},
                     )
                 }
             }

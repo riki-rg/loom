@@ -1,5 +1,6 @@
 package dev.loom
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -16,10 +17,12 @@ import dev.loom.ui.Root
 import dev.loom.ui.LoomViewModel
 
 class MainActivity : ComponentActivity() {
+    private lateinit var vm: LoomViewModel
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        val vm: LoomViewModel = androidx.lifecycle.ViewModelProvider(this)[LoomViewModel::class.java]
+        vm = androidx.lifecycle.ViewModelProvider(this)[LoomViewModel::class.java]
         Playback.attach(this, vm)
         setContent {
             val theme by vm.theme.collectAsState()
@@ -27,10 +30,27 @@ class MainActivity : ComponentActivity() {
                 Surface(Modifier.fillMaxSize()) { Root(vm) }
             }
         }
+        // Cold start from the notification: the track is already restored, just open its sheet.
+        openPlayerIfAsked(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        openPlayerIfAsked(intent)
+    }
+
+    private fun openPlayerIfAsked(intent: Intent?) {
+        if (intent?.action == ACTION_OPEN_PLAYER) vm.openPlayer()
     }
 
     override fun onDestroy() {
         if (isFinishing) Playback.release()
         super.onDestroy()
+    }
+
+    companion object {
+        /** Set on the notification's content intent; the buttons keep their own media commands. */
+        const val ACTION_OPEN_PLAYER = "dev.loom.OPEN_PLAYER"
     }
 }

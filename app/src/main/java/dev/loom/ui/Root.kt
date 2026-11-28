@@ -18,6 +18,12 @@ import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.background
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -53,6 +59,7 @@ import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.text.input.KeyboardType
@@ -68,6 +75,10 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.tween
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.Equalizer
+import androidx.compose.material.icons.rounded.Repeat
+import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.PlaylistPlay
@@ -95,6 +106,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.ImeAction
@@ -141,6 +154,8 @@ fun Root(vm: LoomViewModel) {
     BackHandler(enabled = !state.lyricsFull && !state.openPlayer && state.openHere != null) {
         vm.closePlaylist()
     }
+    // The search page is a page, not a tab: back returns to the search landing page.
+    BackHandler(enabled = state.searchOpen) { vm.closeSearch() }
 
     // One SaveableStateHolder keeps each tab's scroll offset, search text and expanded rows
     // alive while it is off screen, so returning to a tab resumes where it was.
@@ -157,6 +172,7 @@ fun Root(vm: LoomViewModel) {
                         onBack = vm::closePlaylist,
                         onPlay = vm::play,
                         onLike = vm::toggleLike,
+                        onMenu = vm::openMenu,
                         onRemoveTrack = vm::removeFromPlaylist,
                         onRename = { vm.renamePlaylist(open.title, it) },
                         onDelete = { vm.removePlaylist(open.title); vm.closePlaylist() },
@@ -164,7 +180,17 @@ fun Root(vm: LoomViewModel) {
                         onDownloadAll = { vm.downloadPlaylist(open.title, open.tracks) },
                     )
                 } else {
-                    when (state.tab) {
+                    // Tabs cross-fade and slide the way the nav knob does, so switching feels like
+                    // one motion instead of a hard cut. Cheap: only opacity + offset animate.
+                    AnimatedContent(
+                        targetState = state.tab,
+                        transitionSpec = {
+                            (fadeIn(tween(180)) + slideInHorizontally(tween(220)) { it / 14 })
+                                .togetherWith(fadeOut(tween(120)))
+                        },
+                        label = "tab",
+                    ) { tab ->
+                    when (tab) {
                         Tab.HOME -> HomeScreen(state, vm::openCollection, vm::play, vm::toggleLike, vm::openMenu)
                         Tab.FOR_YOU -> ForYouScreen(state, vm::openCollection, vm::play, vm::toggleLike, vm::openMenu)
                         Tab.PLAYLIST -> {
@@ -197,8 +223,11 @@ fun Root(vm: LoomViewModel) {
                             vm::toggleLike,
                             vm::removeQuery,
                             vm::clearQueries,
+                            vm::openSearch,
+                            vm::closeSearch,
                         )
                         Tab.SETTINGS -> SettingsScreen(vm, theme)
+                    }
                     }
                 }
             }
@@ -260,6 +289,8 @@ fun Root(vm: LoomViewModel) {
                 onLikeTrack = { vm.toggleLike(it) },
                 onPlayTrack = { vm.play(it, state.queue) },
                 onAddToPlaylist = { name -> state.current?.let { vm.addToPlaylist(name, it) } },
+                // The player's own three-dot opens the same sheet every other row uses.
+                onMore = { state.current?.let { c -> vm.openMenu(c) } },
                 onCreatePlaylist = { name ->
                     vm.createPlaylist(name)
                     state.current?.let { vm.addToPlaylist(name, it) }
@@ -295,6 +326,15 @@ fun Root(vm: LoomViewModel) {
                 },
                 onArtist = { vm.openArtist(t) },
                 onDownload = { vm.closeMenu(); dlTrack = t },
+                // Only when the sheet was opened from the player: the extras act on playback.
+                player = if (state.openPlayer) PlayerActions(
+                    shuffle = state.shuffle,
+                    repeat = state.repeat,
+                    eq = state.eq,
+                    onShuffle = { vm.toggleShuffle() },
+                    onRepeat = { vm.toggleRepeat() },
+                    onEq = { vm.setEq(nextEq(state.eq)); vm.closeMenu() },
+                ) else null,
             )
         }
 
@@ -406,23 +446,6 @@ private fun HomeScreen(
             EmptyState("Nothing to show", "Could not reach YouTube Music.")
         else -> LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 190.dp)) {
             item { BrandHeader("Loom", "Home") }
-            // Tracks before cards: the first screen should be playable, not a wall of covers.
-            if (state.topTracks.isNotEmpty()) {
-                item {
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("Mix lagu", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
-                        TextButton(onClick = { onPlay(state.topTracks.first(), state.topTracks) }) {
-                            Text("Putar semua")
-                        }
-                    }
-                }
-                itemsIndexed(state.topTracks, key = { _, t -> "ht" + t.id }) { i, t ->
-                    NumberedTrackRow(i + 1, t, state.current?.id == t.id, liked = state.liked.any { it.id == t.id && it.source == t.source }, onPlay = { onPlay(t, state.topTracks) }, onLike = { onLike(t) }, onMenu = { onMenu(t) })
-                }
-            }
             items(state.shelves, key = { "hs" + it.title }) { shelf -> ShelfRow(shelf.title, shelf.items, onOpen) }
         }
     }
@@ -460,6 +483,26 @@ private fun ForYouScreen(
             }
         }
         items(state.forYou, key = { "fs" + it.title }) { shelf -> ShelfRow(shelf.title, shelf.items, onOpen) }
+        // Moved off Home: the mix is a recommendation, and 12 rows keep the tab quick to open.
+        if (state.topTracks.isNotEmpty()) {
+            val mix = state.topTracks.take(12)
+            item {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Mix lagu", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { onPlay(mix.first(), mix) }) { Text("Putar semua") }
+                }
+            }
+            itemsIndexed(mix, key = { _, t -> "fy" + t.id }) { i, t ->
+                NumberedTrackRow(
+                    i + 1, t, state.current?.id == t.id,
+                    liked = state.liked.any { it.id == t.id && it.source == t.source },
+                    onPlay = { onPlay(t, mix) }, onLike = { onLike(t) }, onMenu = { onMenu(t) },
+                )
+            }
+        }
     }
 }
 
@@ -554,9 +597,36 @@ private fun QueueScreen(
                     TrackRow(t, state.current?.id == t.id, liked = state.liked.any { it.id == t.id && it.source == t.source }, onLike = { onLike(t) }) { onPlay(t, state.weekly) }
                 }
             }
-            Lib.DOWNLOADS -> if (state.downloads.isEmpty()) {
+            Lib.DOWNLOADS -> if (state.downloads.isEmpty() && state.downloading == null) {
                 item { EmptyState("Belum ada unduhan", "Unduh satu lagu dari menu titik tiga, atau satu playlist dari halaman playlist.") }
             } else {
+                // Live row: percentage, bytes, speed and the estimate, all from one sample.
+                state.downloading?.let { label ->
+                    item {
+                        val pct = ((state.downloadProgress ?: 0f) * 100).toInt()
+                        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp)) {
+                            Text(label, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Spacer(Modifier.height(8.dp))
+                            LinearProgressIndicator(
+                                progress = { state.downloadProgress ?: 0f },
+                                modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(50)),
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                buildString {
+                                    append("$pct%")
+                                    state.downloadSample?.let { s ->
+                                        if (s.total > 0) append(" · ${sizeText(s.bytes)} / ${sizeText(s.total)}")
+                                        if (s.bytesPerSecond > 0) append(" · ${sizeText(s.bytesPerSecond)}/s")
+                                        s.etaSeconds?.let { append(" · sisa ${if (it < 60) "$it dtk" else "${it / 60} mnt"}") }
+                                    }
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
                 state.downloads.forEach { (folder, files) ->
                     item {
                         SectionTitle(folder ?: "Lagu lepas", files.size)
@@ -683,6 +753,7 @@ private fun PlaylistDetail(
     onBack: () -> Unit,
     onPlay: (Track, List<Track>) -> Unit,
     onLike: (Track) -> Unit,
+    onMenu: (Track) -> Unit,
     onRemoveTrack: (Track) -> Unit,
     onRename: (String) -> Unit,
     onDelete: () -> Unit,
@@ -751,7 +822,7 @@ private fun PlaylistDetail(
                         liked = state.liked.any { it.id == t.id && it.source == t.source },
                         onPlay = { onPlay(t, tracks) },
                         onLike = { onLike(t) },
-                        onMenu = { onLike(t) },
+                        onMenu = { onMenu(t) },
                         // Only a playlist the user owns can lose a track.
                         onRemove = if (open.local) ({ onRemoveTrack(t) }) else null,
                     )
@@ -1140,11 +1211,26 @@ fun TrackActionsSheet(
     onShare: () -> Unit,
     onArtist: () -> Unit,
     onDownload: () -> Unit,
+    /** Player-only extras; null hides the section so the plain track sheet stays as it was. */
+    player: PlayerActions? = null,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface) {
-        TrackActionsBody(track, liked, playlists, onDismiss, onPlayNext, onQueue, onLike, onSaveTo, onCreate, onShare, onArtist, onDownload)
+        TrackActionsBody(track, liked, playlists, onDismiss, onPlayNext, onQueue, onLike, onSaveTo, onCreate, onShare, onArtist, onDownload, player)
     }
 }
+
+/**
+ * The controls that used to sit as five separate icons under the cover. They live in the sheet now:
+ * one entry point, larger targets, and the artwork keeps its space.
+ */
+data class PlayerActions(
+    val shuffle: Boolean,
+    val repeat: Boolean,
+    val eq: String,
+    val onShuffle: () -> Unit,
+    val onRepeat: () -> Unit,
+    val onEq: () -> Unit,
+)
 
 /** Sheet contents without the sheet chrome, so it can be rendered in a test without a window. */
 @Composable
@@ -1161,6 +1247,7 @@ fun TrackActionsBody(
     onShare: () -> Unit,
     onArtist: () -> Unit,
     onDownload: () -> Unit,
+    player: PlayerActions? = null,
 ) {
     Column(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1204,6 +1291,12 @@ fun TrackActionsBody(
             SheetRow("Buat playlist baru", Icons.Rounded.Add) { onCreate() }
             SheetRow("Unduh lagu", Icons.Rounded.Download) { onDownload() }
             SheetRow("Buka halaman artis", Icons.Rounded.Person) { onArtist() }
+            if (player != null) {
+                HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                SheetRow(if (player.shuffle) "Acak: aktif" else "Acak: mati", Icons.Rounded.Shuffle) { player.onShuffle() }
+                SheetRow(if (player.repeat) "Ulangi: aktif" else "Ulangi: mati", Icons.Rounded.Repeat) { player.onRepeat() }
+                SheetRow("Equalizer · ${player.eq}", Icons.Rounded.Equalizer) { player.onEq() }
+            }
         }
 }
 
@@ -1255,6 +1348,13 @@ private fun SheetRow(label: String, icon: androidx.compose.ui.graphics.vector.Im
 }
 
 @OptIn(ExperimentalLayoutApi::class)
+/**
+ * Two pages, one box.
+ *
+ * Landing: a tap target that looks like a search bar, the genres people actually start from, then
+ * what the user searched and played before. Tapping it opens [SearchPage], which is only the box,
+ * the title history and live title suggestions — nothing else competes with typing.
+ */
 @Composable
 private fun SearchScreen(
     state: UiState,
@@ -1265,71 +1365,160 @@ private fun SearchScreen(
     onLike: (Track) -> Unit,
     onRemoveQuery: (String) -> Unit,
     onClearQueries: () -> Unit,
+    onOpen: () -> Unit,
+    onClose: () -> Unit,
 ) {
+    if (state.searchOpen) {
+        SearchPage(state, onQuery, onSearch, onPlayQuery, onPlay, onLike, onRemoveQuery, onClose)
+        return
+    }
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 190.dp)) {
+        item { BrandHeader("Search", "All sources at once") }
+        item {
+            // Not a real field: it only opens the page, so the landing page never fights the IME.
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(Color.White.copy(alpha = 0.08f))
+                    .clickable(onClick = onOpen)
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(10.dp))
+                Text("Lagu, artis, album", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (state.queries.isNotEmpty()) {
+            item {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 4.dp, end = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    SectionTitle("Riwayat pencarian", modifier = Modifier.weight(1f))
+                    TextButton(onClick = onClearQueries) { Text("Hapus semua", style = MaterialTheme.typography.labelMedium) }
+                }
+            }
+            item {
+                FlowRow(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    state.queries.forEach { q -> Chip(q, false, onClick = { onPlayQuery(q) }, onRemove = { onRemoveQuery(q) }) }
+                }
+            }
+        }
+        // Six genres: enough to browse, few enough to scan without scrolling.
+        item { SectionTitle("Telusuri genre") }
+        items(Genres.take(6), key = { "g" + it }) { g ->
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 3.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable { onPlayQuery(g) }
+                    .padding(horizontal = 14.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(g, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                Icon(Icons.Rounded.ChevronRight, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (state.searchPlayed.isNotEmpty()) {
+            item { SectionTitle("Terakhir diputar", state.searchPlayed.size) }
+            items(state.searchPlayed, key = { "sp" + it.source.name + it.id }) { t ->
+                TrackRow(t, selected = state.current?.id == t.id, liked = state.liked.any { it.id == t.id && it.source == t.source }, onLike = { onLike(t) }) { onPlay(t) }
+            }
+        }
+    }
+}
+
+/** Genres the app can actually answer for: each one is a plain search query. */
+private val Genres = listOf(
+    "Pop Indonesia", "Dangdut", "Rock", "Hip hop", "Lo-fi", "K-pop", "Jazz", "Akustik",
+)
+
+/** The typing page: box, title history, live suggestions. Results replace the suggestions. */
+@Composable
+private fun SearchPage(
+    state: UiState,
+    onQuery: (String) -> Unit,
+    onSearch: () -> Unit,
+    onPlayQuery: (String) -> Unit,
+    onPlay: (Track) -> Unit,
+    onLike: (Track) -> Unit,
+    onRemoveQuery: (String) -> Unit,
+    onClose: () -> Unit,
+) {
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     Column(Modifier.fillMaxSize()) {
-        BrandHeader("Search", "All sources at once")
-        TextField(
-            value = state.query,
-            onValueChange = onQuery,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            placeholder = { Text("Songs, artists, albums") },
-            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-            singleLine = true,
-            shape = RoundedCornerShape(22.dp),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = { onSearch() }),
-            colors = TextFieldDefaults.colors(
-                focusedContainerColor = Color.White.copy(alpha = 0.08f),
-                unfocusedContainerColor = Color.White.copy(alpha = 0.08f),
-                focusedIndicatorColor = Color.Transparent,
-                unfocusedIndicatorColor = Color.Transparent,
-            ),
-        )
+        Row(
+            Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp, top = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onClose) { Icon(Icons.Rounded.ArrowBack, contentDescription = "Back") }
+            TextField(
+                value = state.query,
+                onValueChange = onQuery,
+                modifier = Modifier.weight(1f).focusRequester(focus),
+                placeholder = { Text("Lagu, artis, album") },
+                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                singleLine = true,
+                shape = RoundedCornerShape(22.dp),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { onSearch() }),
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = Color.White.copy(alpha = 0.08f),
+                    unfocusedContainerColor = Color.White.copy(alpha = 0.08f),
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                ),
+            )
+        }
         Spacer(Modifier.height(10.dp))
         when {
             state.loading -> CenterSpinner()
-            // Empty box: recent queries first, then what was played last.
-            !state.searched -> LazyColumn(contentPadding = PaddingValues(bottom = 190.dp)) {
-                if (state.queries.isNotEmpty()) {
-                    item {
-                        Row(
-                            Modifier.fillMaxWidth().padding(start = 4.dp, end = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            SectionTitle("Recent searches", modifier = Modifier.weight(1f))
-                            TextButton(onClick = onClearQueries) {
-                                Text("Hapus semua", style = MaterialTheme.typography.labelMedium)
-                            }
-                        }
-                    }
-                    item {
-                        FlowRow(
-                            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            state.queries.forEach { q ->
-                                Chip(q, false, onClick = { onPlayQuery(q) }, onRemove = { onRemoveQuery(q) })
-                            }
-                        }
-                    }
-                    item { Spacer(Modifier.height(18.dp)) }
-                }
-                if (state.searchPlayed.isNotEmpty()) {
-                    item { SectionTitle("Recently played", state.searchPlayed.size) }
-                    items(state.searchPlayed, key = { "sp" + it.source.name + it.id }) { t ->
-                        TrackRow(t, selected = state.current?.id == t.id, liked = state.liked.any { it.id == t.id && it.source == t.source }, onLike = { onLike(t) }) { onPlay(t) }
-                    }
-                }
-                if (state.queries.isEmpty() && state.searchPlayed.isEmpty()) {
-                    item { EmptyState("Search to start", "Type a song, artist or album. All three sources answer at once.") }
-                }
-            }
-            state.results.isEmpty() -> EmptyState("No results", state.error ?: "Try a different spelling.")
-            else -> LazyColumn(contentPadding = PaddingValues(bottom = 190.dp)) {
-                item { SectionTitle("Results", state.results.size) }
+            state.searched && state.results.isNotEmpty() -> LazyColumn(contentPadding = PaddingValues(bottom = 190.dp)) {
+                item { SectionTitle("Hasil", state.results.size) }
                 items(state.results, key = { it.source.name + it.id }) { t ->
                     TrackRow(t, selected = state.current?.id == t.id, liked = state.liked.any { it.id == t.id && it.source == t.source }, onLike = { onLike(t) }) { onPlay(t) }
+                }
+            }
+            state.searched -> EmptyState("Tidak ada hasil", state.error ?: "Coba ejaan lain.")
+            // While typing: suggested titles first, then the user's own title history.
+            state.query.isNotBlank() -> LazyColumn(contentPadding = PaddingValues(bottom = 190.dp)) {
+                if (state.suggest.isNotEmpty()) {
+                    item { SectionTitle("Saran") }
+                    items(state.suggest, key = { "sg" + it }) { s ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable { onPlayQuery(s) }
+                                .padding(horizontal = 20.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.size(17.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.width(12.dp))
+                            Text(s, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+            else -> LazyColumn(contentPadding = PaddingValues(bottom = 190.dp)) {
+                if (state.queries.isNotEmpty()) {
+                    item { SectionTitle("Riwayat pencarian") }
+                    items(state.queries, key = { "q" + it }) { q ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable { onPlayQuery(q) }
+                                .padding(horizontal = 20.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(q, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            IconButton(onClick = { onRemoveQuery(q) }, modifier = Modifier.size(32.dp)) {
+                                Icon(Icons.Rounded.Close, contentDescription = "Hapus", modifier = Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                } else {
+                    item { EmptyState("Cari lagu", "Ketik judul, artis atau album. Semua sumber menjawab sekaligus.") }
                 }
             }
         }
@@ -1375,8 +1564,8 @@ private fun SettingsScreen(vm: LoomViewModel, theme: ThemeState) {
         item { Spacer(Modifier.height(24.dp)) }
         item {
             Text(
-                "Spotify plays 30-second previews; full tracks need a Premium sign-in. " +
-                    "YouTube Music and SoundCloud play in full.",
+                "Spotify tracks are matched to the same recording on YouTube Music and play in full; " +
+                    "the 30-second preview is only the fallback when no match is found.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 20.dp),
@@ -1395,6 +1584,19 @@ private fun BrandHeader(title: String, subtitle: String) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+}
+
+/** Same unit switch as the download notification, so both readouts agree. */
+private fun sizeText(b: Long): String = when {
+    b >= 1_048_576 -> String.format(java.util.Locale.US, "%.1f MB", b / 1048576.0)
+    b >= 1024 -> "${b / 1024} KB"
+    else -> "$b B"
+}
+
+/** Cycles the equalizer presets; the player's old dialog listed them, a menu row needs one tap. */
+private fun nextEq(current: String): String {
+    val all = dev.loom.player.Eq.names
+    return all[(all.indexOf(current).coerceAtLeast(0) + 1) % all.size]
 }
 
 @Composable
