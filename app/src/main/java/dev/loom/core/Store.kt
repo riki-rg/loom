@@ -66,6 +66,11 @@ class Store(ctx: Context) {
             .putLong("theme_seed", v.customSeed ?: 0L)
             .apply()
 
+    /** Floating island over other apps. Off until the user grants the overlay permission. */
+    var islandOn: Boolean
+        get() = p.getBoolean("island_on", true)
+        set(v) = p.edit().putBoolean("island_on", v).apply()
+
     var history: List<Track>
         get() = readTracks("history")
         private set(v) = write("history", v.take(60).map { it.toJson() })

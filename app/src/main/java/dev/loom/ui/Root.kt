@@ -96,6 +96,7 @@ import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
@@ -145,8 +146,8 @@ fun Root(vm: LoomViewModel) {
     }
 
     // Opening the sheet is also when lyrics are worth fetching.
-    LaunchedEffect(state.openPlayer, state.current?.id) {
-        if (state.openPlayer) vm.loadLyrics()
+    LaunchedEffect(state.openPlayer, state.lyricsFull, state.current?.id) {
+        if (state.openPlayer || state.lyricsFull) vm.loadLyrics()
     }
 
     // Hardware back must unwind the same stack the UI shows, in this order: lyrics page,
@@ -169,9 +170,6 @@ fun Root(vm: LoomViewModel) {
             Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
-                // The island floats over this subtree, so its height is reserved here instead of
-                // letting it sit on top of the first header.
-                .padding(top = if (state.current != null) 60.dp else 0.dp)
                 .hazeSource(haze),
         ) {
             tabStates.SaveableStateProvider(state.tab.name) {
@@ -262,30 +260,14 @@ fun Root(vm: LoomViewModel) {
                     )
                 }
             }
+            NowPlayingPill(
+                state = state,
+                haze = haze,
+                progress = if (position.second > 0) position.first.toFloat() / position.second else 0f,
+                onToggle = vm::togglePlay,
+                onSkip = vm::skip,
+            ) { vm.openPlayer() }
             FloatingNav(state.tab, haze) { vm.setTab(it) }
-        }
-
-        // Dynamic Island: only while something is loaded, and never over the player or lyrics,
-        // which are full surfaces of their own.
-        val now = state.current
-        AnimatedVisibility(
-            visible = now != null && !state.openPlayer && !state.lyricsFull,
-            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 6.dp),
-            enter = slideInVertically(tween(280)) { -it } + fadeIn(tween(200)),
-            exit = slideOutVertically(tween(220)) { -it } + fadeOut(tween(140)),
-        ) {
-            now?.let { t ->
-                DynamicIsland(
-                    track = t,
-                    playing = state.playing,
-                    resolving = state.resolving,
-                    positionMs = position.first,
-                    durationMs = position.second,
-                    onToggle = vm::togglePlay,
-                    onSkip = vm::skip,
-                    onOpenLyrics = { vm.openLyrics() },
-                )
-            }
         }
 
         // Full player slides over everything, including the nav.
@@ -1885,6 +1867,44 @@ private fun SettingsScreen(vm: LoomViewModel, theme: ThemeState) {
                         vm.setMode(m)
                     })
                 }
+            }
+        }
+        item { Spacer(Modifier.height(24.dp)) }
+        item { Caption("Floating island") }
+        item {
+            val ctx = LocalContext.current
+            val granted = remember { android.provider.Settings.canDrawOverlays(ctx) }
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Show over other apps", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        if (granted) "Granted. Tap the island to open lyrics."
+                        else "Needs the draw-over-apps permission.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = vm.islandOn && granted,
+                    onCheckedChange = { on ->
+                        if (granted) {
+                            vm.islandOn = on
+                        } else {
+                            // Only the system can grant this; send the user to the right page.
+                            runCatching {
+                                ctx.startActivity(
+                                    android.content.Intent(
+                                        android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                        android.net.Uri.parse("package:" + ctx.packageName),
+                                    )
+                                )
+                            }
+                        }
+                    },
+                )
             }
         }
         item { Spacer(Modifier.height(24.dp)) }

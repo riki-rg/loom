@@ -91,6 +91,8 @@ data class UiState(
     val lyricOffsets: Map<String, Double> = emptyMap(),
     /** Downloaded files grouped by playlist folder; null key = loose tracks. */
     val downloads: Map<String?, List<dev.loom.core.Downloaded>> = emptyMap(),
+    /** Mirrors [Store.islandOn] so Settings can redraw when the switch flips. */
+    val islandOn: Boolean = true,
     /** 0f..1f while a download runs, null when idle. */
     val downloadProgress: Float? = null,
     val downloading: String? = null,
@@ -613,6 +615,14 @@ class LoomViewModel(app: Application) : AndroidViewModel(app) {
         store.toggleSaved(c)
         _state.value = _state.value.copy(saved = store.saved)
     }
+
+    /** Floating island: the permission lives in system Settings, so the row has to open it. */
+    var islandOn: Boolean
+        get() = store.islandOn
+        set(v) {
+            store.islandOn = v
+            _state.value = _state.value.copy(islandOn = v)
+        }
 
     fun openPlayer() { _state.value = _state.value.copy(openPlayer = true) }
     fun closePlayer() { _state.value = _state.value.copy(openPlayer = false, lyricsFull = false) }

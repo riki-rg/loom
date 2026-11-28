@@ -1,5 +1,6 @@
 package dev.loom.player
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.media3.session.CommandButton
 import androidx.media3.session.SessionCommand
@@ -34,6 +35,57 @@ private const val SEEK_FORWARD = "dev.loom.SEEK_FORWARD"
 
 class PlaybackService : MediaSessionService() {
     private var session: MediaSession? = null
+    private var island: IslandOverlay? = null
+
+    /**
+     * Mirrors the player into the floating island. One listener, so the island can never drift
+     * from what is actually playing; it is only created while the overlay permission is granted.
+     */
+    private val islandListener = object : Player.Listener {
+        override fun onIsPlayingChanged(isPlaying: Boolean) = syncIsland()
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = syncIsland()
+        override fun onPlaybackStateChanged(playbackState: Int) = syncIsland()
+    }
+
+    private fun syncIsland() {
+        val p = session?.player ?: return
+        // The permission can be granted after the service started, and the switch lives in
+        // Settings, so both are checked here rather than once in onCreate.
+        // Also hidden while Loom is in front: the in-app pill already covers now-playing there.
+        if (!dev.loom.core.Store(this).islandOn ||
+            !android.provider.Settings.canDrawOverlays(this) ||
+            dev.loom.LoomApp.Foreground.visible
+        ) {
+            island?.hide()
+            return
+        }
+        val overlay = island ?: IslandOverlay(this) {
+            (session?.player?.currentPosition ?: 0L).coerceAtLeast(0L) to
+                (session?.player?.duration ?: 0L).coerceAtLeast(0L)
+        }.also { island = it }
+        val item = p.currentMediaItem
+        if (item == null) {
+            overlay.hide()
+            return
+        }
+        val meta = item.mediaMetadata
+        // The source lives in the item's loom:// URI, not in the media id; guessing YT_MUSIC
+        // mislabelled every Spotify and SoundCloud track.
+        val uri = item.localConfiguration?.uri?.toString().orEmpty()
+        val track = dev.loom.core.Track(
+            id = item.mediaId,
+            source = dev.loom.core.Music.trackOfUri(uri)?.source ?: dev.loom.core.Source.YT_MUSIC,
+            title = meta.title?.toString().orEmpty(),
+            artist = meta.artist?.toString().orEmpty(),
+            art = meta.artworkUri?.toString().orEmpty(),
+        )
+        overlay.show(
+            track,
+            p.isPlaying,
+            p.currentPosition.coerceAtLeast(0L),
+            p.duration.coerceAtLeast(0L),
+        )
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -101,6 +153,21 @@ class PlaybackService : MediaSessionService() {
                 }
             })
             .build()
+        session?.player?.addListener(islandListener)
+        // RECEIVER_NOT_EXPORTED only exists from API 33; on 26-32 the two-arg overload keeps the
+        // receiver private to this app anyway, since these actions are never broadcast publicly.
+        val filter = android.content.IntentFilter().apply {
+            addAction(ACTION_TOGGLE)
+            addAction(ACTION_NEXT)
+            addAction(ACTION_PREV)
+            addAction(ACTION_REFRESH)
+        }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(islandReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(islandReceiver, filter)
+        }
         // The EQ needs a live audio session id, which only ExoPlayer itself exposes.
         session?.player?.let { p ->
             p.addListener(object : Player.Listener {
@@ -111,9 +178,31 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    /**
+     * Buttons on the floating island arrive here. A local broadcast rather than startService: the
+     * app is in the background while the island is visible, and startForegroundService would
+     * demand a startForeground() within five seconds or kill the process.
+     */
+    private val islandReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context, intent: Intent) {
+            val p = session?.player ?: return
+            when (intent.action) {
+                ACTION_TOGGLE -> if (p.isPlaying) p.pause() else p.play()
+                ACTION_NEXT -> p.seekToNextMediaItem()
+                ACTION_PREV -> p.seekToPreviousMediaItem()
+                // Loom left the foreground: no player event fires, so the island has to be asked.
+                ACTION_REFRESH -> syncIsland()
+            }
+        }
+    }
+
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo) = session
 
     override fun onDestroy() {
+        runCatching { unregisterReceiver(islandReceiver) }
+        island?.hide()
+        island = null
+        session?.player?.removeListener(islandListener)
         session?.run {
             player.release()
             release()
@@ -123,6 +212,11 @@ class PlaybackService : MediaSessionService() {
     }
 
     companion object {
+        const val ACTION_TOGGLE = "dev.loom.TOGGLE"
+        const val ACTION_NEXT = "dev.loom.NEXT"
+        const val ACTION_PREV = "dev.loom.PREV"
+        const val ACTION_REFRESH = "dev.loom.REFRESH"
+
         @OptIn(UnstableApi::class)
         fun buildPlayer(ctx: Context): ExoPlayer {
             val http = DefaultHttpDataSource.Factory()

@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- The floating island draws over other apps; the user grants it in system Settings. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- Playlist downloads can run for minutes; without this Android kills the process. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 

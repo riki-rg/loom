@@ -41,7 +41,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openPlayerIfAsked(intent: Intent?) {
-        if (intent?.action == ACTION_OPEN_PLAYER) vm.openPlayer()
+        when (intent?.action) {
+            ACTION_OPEN_PLAYER -> vm.openPlayer()
+            // The floating island opens lyrics, not the full player.
+            ACTION_OPEN_LYRICS -> vm.openLyrics()
+        }
     }
 
     override fun onDestroy() {
@@ -52,5 +56,6 @@ class MainActivity : ComponentActivity() {
     companion object {
         /** Set on the notification's content intent; the buttons keep their own media commands. */
         const val ACTION_OPEN_PLAYER = "dev.loom.OPEN_PLAYER"
+        const val ACTION_OPEN_LYRICS = "dev.loom.OPEN_LYRICS"
     }
 }
